@@ -8,9 +8,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
@@ -20,10 +23,13 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/subgraph/inotify"
+	"google.golang.org/grpc"
 	"gopkg.in/ini.v1"
+
+	pb "yasutakatou/goTrust/proto"
 )
 
-type ruleData struct {
+type serverRuleData struct {
 	SCORE   int
 	ACT     string
 	EXEC    string
@@ -31,12 +37,28 @@ type ruleData struct {
 	NOPATH  string
 }
 
+type clientRuleData struct {
+	EXEC    string
+	CMDLINE []string
+	NOPATH  string
+}
+
+const (
+	reqCmd     = "requestClient"
+	hitCmd     = "hitProcess"
+	endRuleCmd = "endRules"
+)
+
 var (
 	debug, logging bool
-	rules          []ruleData
+	serverRules    []serverRuleData
+	clientRules    []clientRuleData
 )
 
 func main() {
+	_client := flag.Bool("client", false, "[-client=client mode (true is enable)]")
+	_server := flag.String("server", "127.0.0.1:50005", "[-server=connect server (default: 127.0.0.1:50005)]")
+	_port := flag.String("port", ":50005", "[-port=server port (default: :50005)]")
 	_Debug := flag.Bool("debug", false, "[-debug=debug mode (true is enable)]")
 	_Logging := flag.Bool("log", false, "[-log=logging mode (true is enable)]")
 	_Config := flag.String("config", "goTrust.ini", "[-config=config file)]")
@@ -47,10 +69,151 @@ func main() {
 	debug = bool(*_Debug)
 	logging = bool(*_Logging)
 
-	if Exists(*_Config) == true {
-		loadConfig(*_Config)
+	if *_client == true {
+		clientStart(*_server)
 	} else {
-		fmt.Printf("Fail to read config file: %v\n", *_Config)
+		serverStart(*_port, *_Config, *_autoRW)
+	}
+
+	for {
+		fmt.Printf(".")
+		time.Sleep(time.Second * time.Duration(3))
+	}
+	os.Exit(0)
+}
+
+func sendServerMsg(stream pb.Logging_LogClient, cmd, str string) {
+	req := pb.Request{Cmd: cmd, Str: str}
+	if err := stream.Send(&req); err != nil {
+		log.Fatalf("can not send %v", err)
+		os.Exit(1)
+	}
+}
+
+func clientStart(server string) {
+	conn, err := grpc.Dial(server, grpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("can not connect with server %v", err)
+		os.Exit(1)
+	}
+
+	client := pb.NewLoggingClient(conn)
+	stream, err := client.Log(context.Background())
+	if err != nil {
+		log.Fatalf("openn stream error %v", err)
+		os.Exit(1)
+	}
+
+	ctx := stream.Context()
+	done := make(chan bool)
+
+	sendServerMsg(stream, reqCmd, "")
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			log.Fatalf("can not receive %v", err)
+			os.Exit(1)
+		}
+
+		if resp.Cmd == endRuleCmd {
+			break
+		} else {
+			if stra := searchPath(resp.Cmd); stra != "" {
+				strb := strings.Split(resp.Str, "\t")
+				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
+				fmt.Println("- - - -")
+				fmt.Println(stra)
+				fmt.Println(strb)
+				fmt.Println(resp.Cmd)
+			}
+		}
+	}
+
+	go func() {
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				log.Fatalf("can not receive %v", err)
+				os.Exit(1)
+			}
+			debugLog("recv: " + resp.Cmd + " " + resp.Str)
+		}
+	}()
+
+	fmt.Println(clientRules)
+	if len(clientRules) > 0 {
+		setWatch(stream)
+	}
+
+	go func() {
+		<-ctx.Done()
+		if err := ctx.Err(); err != nil {
+			log.Println(err)
+		}
+		close(done)
+	}()
+	//<-done
+}
+
+type server struct{}
+
+func (s server) Log(srv pb.Logging_LogServer) error {
+	ctx := srv.Context()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			req, err := srv.Recv()
+			if err == io.EOF {
+				log.Println("exit")
+				return nil
+			} else if err == nil {
+				switch req.Cmd {
+				case reqCmd:
+					respRules(srv)
+				case hitCmd:
+				}
+				continue
+			} else {
+				log.Printf("receive error %v", err)
+				continue
+			}
+		}
+	}
+}
+
+func concatTab(strs []string) string {
+	strb := ""
+	for x, stra := range strs {
+		if x == 0 {
+			strb = stra
+		} else {
+			strb = "\t" + stra
+		}
+	}
+	return strb
+}
+
+func respRules(srv pb.Logging_LogServer) {
+	for _, rule := range serverRules {
+		resp := pb.Response{Cmd: rule.NOPATH, Str: concatTab(rule.CMDLINE)}
+		if err := srv.Send(&resp); err != nil {
+			log.Printf("send error %v", err)
+		}
+	}
+	resp := pb.Response{Cmd: endRuleCmd, Str: ""}
+	if err := srv.Send(&resp); err != nil {
+		log.Printf("send error %v", err)
+	}
+}
+
+func serverStart(port, config string, autoRW bool) {
+	if Exists(config) == true {
+		loadConfig(config)
+	} else {
+		fmt.Printf("Fail to read config file: %v\n", config)
 		os.Exit(1)
 	}
 
@@ -61,12 +224,12 @@ func main() {
 	}
 	defer watcher.Close()
 
-	if *_autoRW == true {
+	if autoRW == true {
 		go func() {
 			for {
 				select {
 				case <-watcher.Events:
-					loadConfig(*_Config)
+					loadConfig(config)
 				case <-watcher.Errors:
 					fmt.Println("ERROR", err)
 				}
@@ -74,28 +237,33 @@ func main() {
 		}()
 	}
 
-	if err := watcher.Add(*_Config); err != nil {
+	if err := watcher.Add(config); err != nil {
 		fmt.Println("ERROR", err)
 	}
 
-	if len(rules) > 0 {
-		setWatch()
+	// create listiner
+	lis, err := net.Listen("tcp", ":50005")
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
 	}
 
-	for {
-		fmt.Printf(".")
-		time.Sleep(time.Second * time.Duration(3))
+	// create grpc server
+	s := grpc.NewServer()
+	pb.RegisterLoggingServer(s, server{})
+
+	// and start...
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("failed to serve: %v", err)
 	}
-	os.Exit(0)
 }
 
-func setWatch() {
+func setWatch(stream pb.Logging_LogClient) {
 	var err error
 
-	fmt.Println(len(rules))
-	watman := make([]*inotify.Watcher, len(rules))
+	fmt.Println(len(clientRules))
+	watman := make([]*inotify.Watcher, len(clientRules))
 
-	for x, rule := range rules {
+	for x, rule := range clientRules {
 		fmt.Println(x)
 		watman[x], err = inotify.NewWatcher()
 		if err != nil {
@@ -110,12 +278,12 @@ func setWatch() {
 			os.Exit(1)
 		}
 
-		goRouteWatchStart(watman[x])
+		goRouteWatchStart(watman[x], stream)
 	}
 }
 
 func ruleSearch(eventName string) bool {
-	for x, rule := range rules {
+	for x, rule := range serverRules {
 		if strings.Index(eventName, rule.EXEC) != -1 {
 			processes, err := process.Processes()
 			if err != nil {
@@ -124,12 +292,6 @@ func ruleSearch(eventName string) bool {
 				for _, p := range processes {
 					strs, err := p.Cmdline()
 					if err == nil && processSerch(x, strs) == true {
-						switch rules[x].ACT {
-						case "KILL":
-							debugLog(strs + ": Killed!")
-							p.Kill()
-						default:
-						}
 						return true
 					}
 					//log.Println(eventName + " " + strs)
@@ -141,28 +303,34 @@ func ruleSearch(eventName string) bool {
 }
 
 func processSerch(x int, processName string) bool {
-	for _, CMD := range rules[x].CMDLINE {
-		if strings.Index(processName, rules[x].NOPATH) != -1 && CMD == "*" {
+	for _, CMD := range serverRules[x].CMDLINE {
+		if strings.Index(processName, serverRules[x].NOPATH) != -1 && CMD == "*" {
 			return true
 		}
 
-		if strings.Index(processName, rules[x].NOPATH) != -1 && strings.Index(processName, CMD) != -1 {
+		if strings.Index(processName, serverRules[x].NOPATH) != -1 && strings.Index(processName, CMD) != -1 {
 			return true
 		}
 	}
 	return false
 }
 
-func goRouteWatchStart(watman *inotify.Watcher) {
+func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 	go func() {
 		for {
 			select {
 			case ev := <-watman.Event:
+				log.Println("event:", ev)
 				if ev.Mask == 0x1 || ev.Mask == 0x40000001 {
 					if ruleSearch(ev.String()) == true {
-						log.Println("process found!")
+						sendServerMsg(stream, hitCmd, ev.String())
+						// switch serverRules[x].ACT {
+						// case "KILL":
+						// 	debugLog(strs + ": Killed!")
+						// 	p.Kill()
+						// default:
+						// }
 					}
-					//log.Println("event:", ev)
 				}
 			case err := <-watman.Error:
 				log.Println("error:", err)
@@ -175,7 +343,7 @@ func loadConfig(configFile string) {
 	loadOptions := ini.LoadOptions{}
 	loadOptions.UnparseableSections = []string{"Rules"}
 
-	rules = nil
+	serverRules = nil
 
 	cfg, err := ini.LoadSources(loadOptions, configFile)
 	if err != nil {
@@ -222,7 +390,7 @@ func setStructs(configType, datas string, flag int) {
 
 					if stra := searchPath(strs[2]); stra != "" {
 						if val, err := strconv.Atoi(strs[0]); err == nil {
-							rules = append(rules, ruleData{SCORE: val, ACT: strs[1], EXEC: stra, CMDLINE: strr, NOPATH: strs[2]})
+							serverRules = append(serverRules, serverRuleData{SCORE: val, ACT: strs[1], EXEC: stra, CMDLINE: strr, NOPATH: strs[2]})
 							debugLog(v)
 						}
 					}

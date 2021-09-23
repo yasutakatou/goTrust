@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+option go_package = "./";
+
+package protobuf;
+
+service logging {
+  rpc log (stream Request) returns (stream Response) {}
+}
+
+message Request {
+  string cmd = 1;
+  string str = 2;
+}
+
+message Response {
+  string cmd = 1;
+  string str = 2;
+}
