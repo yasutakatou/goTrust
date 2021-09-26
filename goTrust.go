@@ -56,23 +56,27 @@ type clientRuleData struct {
 }
 
 const (
-	reqCmd     = "requestClient"
-	hitCmd     = "hitProcess"
-	endRuleCmd = "endRules"
-	killCmd    = "killProcess"
-	noTrustCmd = "noTrust"
-	reTrustCmd = "reTrust"
-	exitCmd    = "exitClient"
+	reqCmd        = "requestClient"
+	hitCmd        = "hitProcess"
+	endRuleCmd    = "endRules"
+	killCmd       = "killProcess"
+	noTrustCmd    = "noTrust"
+	reTrustCmd    = "reTrust"
+	exitCmd       = "exitClient"
+	addTriggerCmd = "addTrigger"
 )
 
 var (
-	debug, logging, noTrust bool
-	trustFile, lockFile     string
-	trusts                  []trustData
-	clients                 []clientsData
-	serverRules             []serverRuleData
-	clientRules             []clientRuleData
-	triggers                = []uint32{0x1, 0x40000001}
+	debug, logging, noTrust, allowOverride bool
+	trustFile, lockFile, LogDir            string
+	trusts                                 []trustData
+	clients                                []clientsData
+	serverRules                            []serverRuleData
+	clientRules                            []clientRuleData
+	svrTriggers                            []string
+	cliTriggers                            []uint32
+	TimeDecrement                          [2]int
+	myIp                                   string
 )
 
 func main() {
@@ -85,6 +89,7 @@ func main() {
 	_Trust := flag.String("trust", "trust.ini", "[-trust=trusts config file)]")
 	_autoRW := flag.Bool("auto", true, "[-auto=config auto read/write mode (true is enable)]")
 	_Lock := flag.String("lock", "lock", "[-lock=lock file name and path]")
+	_allowOverride := flag.Bool("allowOverride", false, "[-allowOverride=trust file override mode (true is enable)]")
 
 	flag.Parse()
 
@@ -92,6 +97,7 @@ func main() {
 	logging = bool(*_Logging)
 	lockFile = string(*_Lock)
 	trustFile = string(*_Trust)
+	allowOverride = bool(*_allowOverride)
 
 	if *_client == true {
 		clientStart(*_server)
@@ -144,6 +150,38 @@ func clientStart(server string) {
 		log.Fatal(err)
 		os.Exit(1)
 	}
+	myIp = ip
+
+	sendClientMsg(stream, reqCmd, myIp+"\t"+uname())
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			log.Fatalf("can not receive %v", err)
+			os.Exit(1)
+		}
+
+		if resp.Cmd == endRuleCmd {
+			break
+		}
+
+		switch resp.Cmd {
+		case exitCmd:
+			stream.CloseSend()
+			debugLog("add client failed..")
+			os.Exit(1)
+		case addTriggerCmd:
+			if val, err := strconv.ParseUint(resp.Str, 10, 32); err == nil {
+				cliTriggers = append(cliTriggers, uint32(val))
+			} else {
+				log.Fatal(err)
+			}
+		default:
+			if stra := searchPath(resp.Cmd); stra != "" {
+				strb := strings.Split(resp.Str, "\t")
+				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
+			}
+		}
+	}
 
 	go func() {
 		for {
@@ -163,24 +201,6 @@ func clientStart(server string) {
 			}
 		}
 	}()
-
-	sendClientMsg(stream, reqCmd, ip+"\t"+uname())
-	for {
-		resp, err := stream.Recv()
-		if err != nil {
-			log.Fatalf("can not receive %v", err)
-			os.Exit(1)
-		}
-
-		if resp.Cmd == endRuleCmd {
-			break
-		} else {
-			if stra := searchPath(resp.Cmd); stra != "" {
-				strb := strings.Split(resp.Str, "\t")
-				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
-			}
-		}
-	}
 
 	if len(clientRules) > 0 {
 		setWatch(stream)
@@ -221,7 +241,7 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 					}
 				case hitCmd:
 					if actRules(srv, req.Str) == true {
-						sendServerMsg(srv, killCmd, req.Str)
+						sendServerMsg(srv, killCmd, strings.Split(req.Str, "\t")[1])
 					}
 				}
 				continue
@@ -254,28 +274,36 @@ func arrayToString(x [65]int8) string {
 }
 
 func addClient(ip string) bool {
+	ride := 0
 	ips := strings.Split(ip, "\t")
-	fmt.Println(ips)
-	for _, client := range clients {
-		fmt.Println(client)
+	for x, client := range clients {
 		if client.IP == ips[0] {
-			debugLog("clients exsits: " + ips[0])
-			return false
+			if allowOverride == false {
+				debugLog("clients exsits: " + ips[0])
+				return false
+			} else {
+				ride = x + 1
+				break
+			}
 		}
 	}
 	for _, rule := range trusts {
 		ipRegex := regexp.MustCompile(rule.FILTER)
 		if ipRegex.MatchString(ips[0]) == true {
-			clients = append(clients, clientsData{IP: ips[0], SCORE: rule.SCORE, DETAIL: ips[1]})
-			debugLog("add client: " + ips[0] + " " + uname())
-			exportClients(lockFile, trustFile)
+			if ride > 0 {
+				clients[ride-1].SCORE = rule.SCORE
+				debugLog("override client: " + ips[0] + " " + uname())
+			} else {
+				clients = append(clients, clientsData{IP: ips[0], SCORE: rule.SCORE, DETAIL: ips[1]})
+				debugLog("add client: " + ips[0] + " " + uname())
+			}
 			return true
 		}
 	}
 	return false
 }
 
-func exportClients(lockFile, trustFile string) {
+func exportClients() {
 	if Exists(lockFile) == false {
 		lfile, err := os.Create(lockFile)
 		if err != nil {
@@ -284,14 +312,7 @@ func exportClients(lockFile, trustFile string) {
 		}
 		lfile.Close()
 
-		const layout = "2006-01-02_15"
-		t := time.Now()
-		if err := os.Rename(trustFile, trustFile+"_"+t.Format(layout)); err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		file, err := os.Create(trustFile)
+		file, err := os.OpenFile(trustFile, os.O_WRONLY|os.O_CREATE, 0666)
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -304,6 +325,8 @@ func exportClients(lockFile, trustFile string) {
 			_, err = file.WriteString(clients[i].IP + "\t" + convInt + "\t" + clients[i].DETAIL + "\n")
 		}
 
+		time.Sleep(time.Second * time.Duration(1))
+
 		if err := os.Remove(lockFile); err != nil {
 			fmt.Println(err)
 		}
@@ -312,18 +335,59 @@ func exportClients(lockFile, trustFile string) {
 }
 
 func actRules(srv pb.Logging_LogServer, act string) bool {
+	acts := strings.Split(act, "\t")
 	for i := 0; i < len(serverRules); i++ {
 		for _, CMD := range serverRules[i].CMDLINE {
-			if strings.Index(act, serverRules[i].EXEC) != -1 && CMD == "*" {
+			if strings.Index(acts[1], serverRules[i].EXEC) != -1 && CMD == "*" {
+				exportLog(acts[0], serverRules[i], decrementScore(acts[0], serverRules[i].SCORE))
 				return true
 			}
 
-			if strings.Index(act, serverRules[i].EXEC) != -1 && strings.Index(act, CMD) != -1 {
+			if strings.Index(acts[1], serverRules[i].EXEC) != -1 && strings.Index(acts[1], CMD) != -1 {
+				exportLog(acts[0], serverRules[i], decrementScore(acts[0], serverRules[i].SCORE))
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func exportLog(ip string, rule serverRuleData, score int) {
+	var file *os.File
+	var err error
+
+	const layouta = "2006-01-02_15"
+	t := time.Now()
+	const layoutb = "2006-01-02_15-04-05"
+	tt := time.Now()
+
+	filename := LogDir + "/" + ip + "_" + t.Format(layouta) + ".log"
+
+	if Exists(filename) == true {
+		file, err = os.OpenFile(filename, os.O_WRONLY|os.O_APPEND, 0666)
+	} else {
+		file, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	}
+
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	defer file.Close()
+	fmt.Fprintln(file, tt.Format(layoutb)+" | IP: "+ip+" Score: "+strconv.Itoa(score)+" | Score: "+strconv.Itoa(rule.SCORE)+" EXEC: "+rule.EXEC+" ACT: "+rule.ACT)
+}
+
+func decrementScore(ip string, score int) int {
+	for i := 0; i < len(clients); i++ {
+		if clients[i].SCORE-score > 0 {
+			clients[i].SCORE = clients[i].SCORE - score
+			return clients[i].SCORE
+		} else {
+			clients[i].SCORE = 0
+			return 0
+		}
+	}
+	return 0
 }
 
 func concatTab(strs []string) string {
@@ -339,6 +403,10 @@ func concatTab(strs []string) string {
 }
 
 func respRules(srv pb.Logging_LogServer) {
+	for _, rule := range svrTriggers {
+		sendServerMsg(srv, addTriggerCmd, rule)
+	}
+
 	for _, rule := range serverRules {
 		sendServerMsg(srv, rule.EXEC, concatTab(rule.CMDLINE))
 	}
@@ -360,15 +428,15 @@ func serverStart(port, config string, autoRW bool) {
 		os.Exit(1)
 	}
 
-	// creates a new file watcher
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		fmt.Println("ERROR", err)
-		os.Exit(1)
-	}
-	defer watcher.Close()
-
 	if autoRW == true {
+		// creates a new file watcher
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			fmt.Println("ERROR", err)
+			os.Exit(1)
+		}
+		defer watcher.Close()
+
 		go func() {
 			for {
 				select {
@@ -380,38 +448,38 @@ func serverStart(port, config string, autoRW bool) {
 				}
 			}
 		}()
-	}
 
-	if err := watcher.Add(config); err != nil {
-		fmt.Println("ERROR", err)
-		os.Exit(1)
-	}
+		if err := watcher.Add(config); err != nil {
+			fmt.Println("ERROR", err)
+			os.Exit(1)
+		}
 
-	// creates a new file watcher
-	trust, err := fsnotify.NewWatcher()
-	if err != nil {
-		fmt.Println("ERROR", err)
-		os.Exit(1)
-	}
-	defer trust.Close()
+		// creates a new file watcher
+		trust, err := fsnotify.NewWatcher()
+		if err != nil {
+			fmt.Println("ERROR", err)
+			os.Exit(1)
+		}
+		defer trust.Close()
 
-	if autoRW == true {
 		go func() {
 			for {
 				select {
 				case <-trust.Events:
-					loadConfig(trustFile, false)
+					if Exists(lockFile) == false {
+						loadConfig(trustFile, false)
+					}
 				case <-trust.Errors:
 					fmt.Println("ERROR", err)
 					os.Exit(1)
 				}
 			}
 		}()
-	}
 
-	if err := trust.Add(trustFile); err != nil {
-		fmt.Println("ERROR", err)
-		os.Exit(1)
+		if err := trust.Add(trustFile); err != nil {
+			fmt.Println("ERROR", err)
+			os.Exit(1)
+		}
 	}
 
 	// create listiner
@@ -423,6 +491,22 @@ func serverStart(port, config string, autoRW bool) {
 	// create grpc server
 	s := grpc.NewServer()
 	pb.RegisterLoggingServer(s, server{})
+
+	go func() {
+		for {
+			time.Sleep(time.Second * time.Duration(TimeDecrement[0]))
+			fmt.Println(" - - - - - ")
+			for i := 0; i < len(clients); i++ {
+				if clients[i].SCORE-TimeDecrement[1] > 0 {
+					clients[i].SCORE = clients[i].SCORE - TimeDecrement[1]
+				} else {
+					clients[i].SCORE = 0
+				}
+				fmt.Printf("IP: %s Score: %d Detail: %s\n", clients[i].IP, clients[i].SCORE, clients[i].DETAIL)
+			}
+			exportClients()
+		}
+	}()
 
 	// and start...
 	if err := s.Serve(lis); err != nil {
@@ -502,7 +586,7 @@ func processSerch(processName string) bool {
 }
 
 func triggerChecker(ev uint32) bool {
-	for _, x := range triggers {
+	for _, x := range cliTriggers {
 		if ev == x {
 			return true
 		}
@@ -518,7 +602,7 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 				if triggerChecker(ev.Mask) {
 					debugLog("hit: " + ev.String())
 					if strs := ruleSearch(ev.String()); len(strs) > 0 {
-						sendClientMsg(stream, hitCmd, strs)
+						sendClientMsg(stream, hitCmd, myIp+"\t"+strs)
 					}
 				}
 			case err := <-watman.Error:
@@ -531,8 +615,10 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 func loadConfig(trustFile string, tFlag bool) {
 	loadOptions := ini.LoadOptions{}
 	if tFlag == true {
-		loadOptions.UnparseableSections = []string{"Trusts", "Rules"}
+		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir"}
+		trusts = nil
 		serverRules = nil
+		svrTriggers = nil
 	} else {
 		loadOptions.UnparseableSections = []string{"Scores"}
 		clients = nil
@@ -547,8 +633,11 @@ func loadConfig(trustFile string, tFlag bool) {
 	if tFlag == true {
 		setStructs("Trusts", cfg.Section("Trusts").Body(), 0)
 		setStructs("Rules", cfg.Section("Rules").Body(), 1)
+		setStructs("Triggers", cfg.Section("Triggers").Body(), 3)
+		setStructs("TimeDecrement", cfg.Section("TimeDecrement").Body(), 4)
+		setStructs("LogDir", cfg.Section("LogDir").Body(), 5)
 	} else {
-		setStructs("Scores", cfg.Section("Scores").Body(), 3)
+		setStructs("Scores", cfg.Section("Scores").Body(), 2)
 	}
 }
 
@@ -598,14 +687,37 @@ func setStructs(configType, datas string, flag int) {
 						debugLog(v)
 					}
 				}
-			case 3:
+			case 2:
 				if len(strs) == 3 {
 					if val, err := strconv.Atoi(strs[1]); err == nil {
 						clients = append(clients, clientsData{IP: strs[0], SCORE: val, DETAIL: strs[2]})
 						debugLog(v)
 					}
 				}
+			case 4:
+				if len(strs) == 2 {
+					vala, erra := strconv.Atoi(strs[0])
+					valb, errb := strconv.Atoi(strs[1])
+					if erra == nil && errb == nil {
+						TimeDecrement[0] = vala
+						TimeDecrement[1] = valb
+						debugLog(v)
+					}
+				}
+			case 5:
 			}
+		} else if flag == 3 {
+			svrTriggers = append(svrTriggers, v)
+			debugLog(v)
+		} else if flag == 5 {
+			LogDir = v
+			if Exists(LogDir) == false {
+				if err := os.MkdirAll(LogDir, 0777); err != nil {
+					log.Fatal(err)
+					os.Exit(1)
+				}
+			}
+			debugLog(v)
 		}
 	}
 }
@@ -624,7 +736,7 @@ func debugLog(message string) {
 
 	const layout = "2006-01-02_15"
 	t := time.Now()
-	filename := "inco_" + t.Format(layout) + ".log"
+	filename := "goTrust_" + t.Format(layout) + ".log"
 
 	if Exists(filename) == true {
 		file, err = os.OpenFile(filename, os.O_WRONLY|os.O_APPEND, 0666)
