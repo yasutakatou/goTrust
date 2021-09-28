@@ -61,14 +61,16 @@ const (
 	endRuleCmd    = "endRules"
 	killCmd       = "killProcess"
 	noTrustCmd    = "noTrust"
-	reTrustCmd    = "reTrust"
+	trustCmd      = "okTrust"
 	exitCmd       = "exitClient"
 	addTriggerCmd = "addTrigger"
+	pingCmd       = "hello"
 )
 
 var (
 	debug, logging, noTrust, allowOverride bool
 	trustFile, lockFile, LogDir            string
+	openProcess                            []string
 	trusts                                 []trustData
 	clients                                []clientsData
 	serverRules                            []serverRuleData
@@ -100,6 +102,7 @@ func main() {
 	allowOverride = bool(*_allowOverride)
 
 	if *_client == true {
+		noTrust = false
 		clientStart(*_server)
 	} else {
 		serverStart(*_port, *_Rule, *_autoRW)
@@ -107,7 +110,10 @@ func main() {
 
 	for {
 		fmt.Printf(".")
-		time.Sleep(time.Second * time.Duration(3))
+		time.Sleep(time.Second * time.Duration(1))
+		if noTrust == true {
+			noTrustMode()
+		}
 	}
 	os.Exit(0)
 }
@@ -129,6 +135,8 @@ func sendServerMsg(stream pb.Logging_LogServer, cmd, str string) {
 }
 
 func clientStart(server string) {
+	recordOpenProcess()
+
 	conn, err := grpc.Dial(server, grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("can not connect with server %v", err)
@@ -198,6 +206,12 @@ func clientStart(server string) {
 				stream.CloseSend()
 				debugLog("add client failed..")
 				os.Exit(1)
+			case noTrustCmd:
+				debugLog("[no trust mode!]")
+				noTrust = true
+			case trustCmd:
+				debugLog("trust..")
+				noTrust = false
 			}
 		}
 	}()
@@ -231,6 +245,7 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 				log.Println("exit")
 				return nil
 			} else if err == nil {
+				fmt.Println(req.Cmd)
 				switch req.Cmd {
 				case reqCmd:
 					if addClient(req.Str) == true {
@@ -243,6 +258,12 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 					if actRules(srv, req.Str) == true {
 						sendServerMsg(srv, killCmd, strings.Split(req.Str, "\t")[1])
 					}
+				case pingCmd:
+					if scoreSearch(req.Str) == false {
+						sendServerMsg(srv, noTrustCmd, "")
+					} else {
+						sendServerMsg(srv, trustCmd, "")
+					}
 				}
 				continue
 			} else {
@@ -251,6 +272,19 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 			}
 		}
 	}
+}
+
+func scoreSearch(ip string) bool {
+	for _, client := range clients {
+		if client.IP == ip {
+			if client.SCORE == 0 {
+				return false
+			} else {
+				return true
+			}
+		}
+	}
+	return true
 }
 
 func uname() string {
@@ -339,12 +373,12 @@ func actRules(srv pb.Logging_LogServer, act string) bool {
 	for i := 0; i < len(serverRules); i++ {
 		for _, CMD := range serverRules[i].CMDLINE {
 			if strings.Index(acts[1], serverRules[i].EXEC) != -1 && CMD == "*" {
-				exportLog(acts[0], serverRules[i], decrementScore(acts[0], serverRules[i].SCORE))
+				exportLog(acts[0], serverRules[i], decrementScore(srv, acts[0], serverRules[i].SCORE))
 				return true
 			}
 
 			if strings.Index(acts[1], serverRules[i].EXEC) != -1 && strings.Index(acts[1], CMD) != -1 {
-				exportLog(acts[0], serverRules[i], decrementScore(acts[0], serverRules[i].SCORE))
+				exportLog(acts[0], serverRules[i], decrementScore(srv, acts[0], serverRules[i].SCORE))
 				return true
 			}
 		}
@@ -377,7 +411,7 @@ func exportLog(ip string, rule serverRuleData, score int) {
 	fmt.Fprintln(file, tt.Format(layoutb)+" | IP: "+ip+" Score: "+strconv.Itoa(score)+" | Score: "+strconv.Itoa(rule.SCORE)+" EXEC: "+rule.EXEC+" ACT: "+rule.ACT)
 }
 
-func decrementScore(ip string, score int) int {
+func decrementScore(srv pb.Logging_LogServer, ip string, score int) int {
 	for i := 0; i < len(clients); i++ {
 		if clients[i].SCORE-score > 0 {
 			clients[i].SCORE = clients[i].SCORE - score
@@ -537,6 +571,47 @@ func setWatch(stream pb.Logging_LogClient) {
 	}
 }
 
+func recordOpenProcess() {
+	processes, err := process.Processes()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	} else {
+		for _, p := range processes {
+			strs, err := p.Cmdline()
+			//log.Println(eventName + " " + strs)
+			if err == nil {
+				openProcess = append(openProcess, strs)
+			}
+		}
+	}
+}
+
+func noTrustMode() {
+	processes, err := process.Processes()
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		for _, p := range processes {
+			strs, err := p.Cmdline()
+			//log.Println(eventName + " " + strs)
+			if err == nil && openProcessSerch(strs) == false {
+				debugLog(strs + ": Killed!")
+				p.Kill()
+			}
+		}
+	}
+}
+
+func openProcessSerch(pStr string) bool {
+	for _, p := range openProcess {
+		if pStr == p {
+			return true
+		}
+	}
+	return false
+}
+
 func killProcessName(processName string) {
 	processes, err := process.Processes()
 	if err != nil {
@@ -610,6 +685,14 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 			}
 		}
 	}()
+
+	go func() {
+		for {
+			sendClientMsg(stream, pingCmd, myIp)
+			time.Sleep(time.Second * time.Duration(1))
+		}
+	}()
+
 }
 
 func loadConfig(trustFile string, tFlag bool) {
