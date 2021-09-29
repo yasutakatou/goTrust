@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -16,6 +17,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,15 +33,29 @@ import (
 	pb "yasutakatou/goTrust/proto"
 )
 
+//FYI: https://journal.lampetty.net/entry/capturing-stdout-in-golang
+type Capturer struct {
+	saved         *os.File
+	bufferChannel chan string
+	out           *os.File
+	in            *os.File
+}
+
 type trustData struct {
 	FILTER string
 	SCORE  int
+}
+
+type noTrustData struct {
+	FILTER string
+	CMD    string
 }
 
 type clientsData struct {
 	IP     string
 	DETAIL string
 	SCORE  int
+	Trust  bool
 }
 
 type serverRuleData struct {
@@ -68,17 +84,18 @@ const (
 )
 
 var (
-	debug, logging, noTrust, allowOverride bool
-	trustFile, lockFile, LogDir            string
-	openProcess                            []string
-	trusts                                 []trustData
-	clients                                []clientsData
-	serverRules                            []serverRuleData
-	clientRules                            []clientRuleData
-	svrTriggers                            []string
-	cliTriggers                            []uint32
-	TimeDecrement                          [2]int
-	myIp                                   string
+	debug, logging, noTrust, allowOverride  bool
+	trustFile, lockFile, LogDir, replaceStr string
+	openProcess                             []string
+	trusts                                  []trustData
+	noTrusts                                []noTrustData
+	clients                                 []clientsData
+	serverRules                             []serverRuleData
+	clientRules                             []clientRuleData
+	svrTriggers                             []string
+	cliTriggers                             []uint32
+	TimeDecrement                           [2]int
+	myIp                                    string
 )
 
 func main() {
@@ -87,7 +104,8 @@ func main() {
 	_port := flag.String("port", ":50005", "[-port=server port (default: :50005)]")
 	_Debug := flag.Bool("debug", false, "[-debug=debug mode (true is enable)]")
 	_Logging := flag.Bool("log", false, "[-log=logging mode (true is enable)]")
-	_Rule := flag.String("rule", "rules.ini", "[-rule=rules config file)]")
+	_Rule := flag.String("rule", "rules.ini", "[-rule=rules config file]")
+	_replaceStr := flag.String("replaceString", "{}", "[-replaceString= when no trust action, give ip paramater]")
 	_Trust := flag.String("trust", "trust.ini", "[-trust=trusts config file)]")
 	_autoRW := flag.Bool("auto", true, "[-auto=config auto read/write mode (true is enable)]")
 	_Lock := flag.String("lock", "lock", "[-lock=lock file name and path]")
@@ -99,12 +117,14 @@ func main() {
 	logging = bool(*_Logging)
 	lockFile = string(*_Lock)
 	trustFile = string(*_Trust)
+	replaceStr = string(*_replaceStr)
 	allowOverride = bool(*_allowOverride)
 
 	if *_client == true {
 		noTrust = false
 		clientStart(*_server)
 	} else {
+		os.Remove(lockFile)
 		serverStart(*_port, *_Rule, *_autoRW)
 	}
 
@@ -198,7 +218,10 @@ func clientStart(server string) {
 				log.Fatalf("can not receive %v", err)
 				os.Exit(1)
 			}
-			debugLog("recv: " + resp.Cmd + " " + resp.Str)
+			if resp.Cmd != trustCmd {
+				debugLog("recv: " + resp.Cmd + " " + resp.Str)
+			}
+
 			switch resp.Cmd {
 			case killCmd:
 				killProcessName(resp.Str)
@@ -210,7 +233,9 @@ func clientStart(server string) {
 				debugLog("[no trust mode!]")
 				noTrust = true
 			case trustCmd:
-				debugLog("trust..")
+				if noTrust == true {
+					debugLog("[retrust!]")
+				}
 				noTrust = false
 			}
 		}
@@ -245,7 +270,6 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 				log.Println("exit")
 				return nil
 			} else if err == nil {
-				fmt.Println(req.Cmd)
 				switch req.Cmd {
 				case reqCmd:
 					if addClient(req.Str) == true {
@@ -261,6 +285,9 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 				case pingCmd:
 					if scoreSearch(req.Str) == false {
 						sendServerMsg(srv, noTrustCmd, "")
+						if trustSwitch(req.Str) == true {
+							noTrustExec(req.Str)
+						}
 					} else {
 						sendServerMsg(srv, trustCmd, "")
 					}
@@ -272,6 +299,18 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 			}
 		}
 	}
+}
+
+func trustSwitch(ip string) bool {
+	for x, client := range clients {
+		if client.IP == ip {
+			if client.Trust == true {
+				clients[x].Trust = false
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func scoreSearch(ip string) bool {
@@ -328,7 +367,7 @@ func addClient(ip string) bool {
 				clients[ride-1].SCORE = rule.SCORE
 				debugLog("override client: " + ips[0] + " " + uname())
 			} else {
-				clients = append(clients, clientsData{IP: ips[0], SCORE: rule.SCORE, DETAIL: ips[1]})
+				clients = append(clients, clientsData{IP: ips[0], SCORE: rule.SCORE, DETAIL: ips[1], Trust: true})
 				debugLog("add client: " + ips[0] + " " + uname())
 			}
 			return true
@@ -355,14 +394,17 @@ func exportClients() {
 
 		_, err = file.WriteString("[Scores]\n")
 		for i := 0; i < len(clients); i++ {
-			convInt := strconv.Itoa(clients[i].SCORE)
-			_, err = file.WriteString(clients[i].IP + "\t" + convInt + "\t" + clients[i].DETAIL + "\n")
+			if len(clients[i].IP) > 7 {
+				convInt := strconv.Itoa(clients[i].SCORE)
+				_, err = file.WriteString(clients[i].IP + "\t" + convInt + "\t" + clients[i].DETAIL)
+			}
 		}
 
 		time.Sleep(time.Second * time.Duration(1))
 
 		if err := os.Remove(lockFile); err != nil {
 			fmt.Println(err)
+			os.Exit(1)
 		}
 		return
 	}
@@ -536,7 +578,11 @@ func serverStart(port, config string, autoRW bool) {
 				} else {
 					clients[i].SCORE = 0
 				}
-				fmt.Printf("IP: %s Score: %d Detail: %s\n", clients[i].IP, clients[i].SCORE, clients[i].DETAIL)
+				if clients[i].Trust == true {
+					fmt.Printf("[O] IP: %s Score: %d Detail: %s\n", clients[i].IP, clients[i].SCORE, clients[i].DETAIL)
+				} else {
+					fmt.Printf("[X] IP: %s Score: %d Detail: %s\n", clients[i].IP, clients[i].SCORE, clients[i].DETAIL)
+				}
 			}
 			exportClients()
 		}
@@ -596,7 +642,7 @@ func noTrustMode() {
 			strs, err := p.Cmdline()
 			//log.Println(eventName + " " + strs)
 			if err == nil && openProcessSerch(strs) == false {
-				debugLog(strs + ": Killed!")
+				debugLog(strs + ": no trust! Killed!!")
 				p.Kill()
 			}
 		}
@@ -698,7 +744,7 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 func loadConfig(trustFile string, tFlag bool) {
 	loadOptions := ini.LoadOptions{}
 	if tFlag == true {
-		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir"}
+		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir", "noTrusts"}
 		trusts = nil
 		serverRules = nil
 		svrTriggers = nil
@@ -719,6 +765,7 @@ func loadConfig(trustFile string, tFlag bool) {
 		setStructs("Triggers", cfg.Section("Triggers").Body(), 3)
 		setStructs("TimeDecrement", cfg.Section("TimeDecrement").Body(), 4)
 		setStructs("LogDir", cfg.Section("LogDir").Body(), 5)
+		setStructs("noTrusts", cfg.Section("noTrusts").Body(), 6)
 	} else {
 		setStructs("Scores", cfg.Section("Scores").Body(), 2)
 	}
@@ -773,7 +820,11 @@ func setStructs(configType, datas string, flag int) {
 			case 2:
 				if len(strs) == 3 {
 					if val, err := strconv.Atoi(strs[1]); err == nil {
-						clients = append(clients, clientsData{IP: strs[0], SCORE: val, DETAIL: strs[2]})
+						if val == 0 {
+							clients = append(clients, clientsData{IP: strs[0], SCORE: val, DETAIL: strs[2], Trust: false})
+						} else {
+							clients = append(clients, clientsData{IP: strs[0], SCORE: val, DETAIL: strs[2], Trust: true})
+						}
 						debugLog(v)
 					}
 				}
@@ -787,7 +838,11 @@ func setStructs(configType, datas string, flag int) {
 						debugLog(v)
 					}
 				}
-			case 5:
+			case 6:
+				if len(strs) == 2 {
+					noTrusts = append(noTrusts, noTrustData{FILTER: strs[0], CMD: strs[1]})
+					debugLog(v)
+				}
 			}
 		} else if flag == 3 {
 			svrTriggers = append(svrTriggers, v)
@@ -876,4 +931,59 @@ func getIFandIP() (string, string, error) {
 		}
 	}
 	return "", "", errors.New("are you connected to the network?")
+}
+
+func noTrustExec(ip string) {
+	for _, rule := range noTrusts {
+		ipRegex := regexp.MustCompile(rule.FILTER)
+		if ipRegex.MatchString(ip) == true {
+			cmdExec(rule.CMD, ip)
+		}
+	}
+}
+
+func cmdExec(command, ip string) {
+	var cmd *exec.Cmd
+	var out string
+
+	command = strings.Replace(command, replaceStr, ip, 1)
+	debugLog("command: " + command)
+
+	cmd = exec.Command(os.Getenv("SHELL"), "-c", command)
+
+	c := &Capturer{}
+	c.StartCapturingStdout()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	cmd.Run()
+
+	out = c.StopCapturingStdout()
+
+	debugLog(out)
+}
+
+// 標準出力をキャプチャする
+func (c *Capturer) StartCapturingStdout() {
+	c.saved = os.Stdout
+	var err error
+	c.in, c.out, err = os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+
+	os.Stdout = c.out
+	c.bufferChannel = make(chan string)
+	go func() {
+		var b bytes.Buffer
+		io.Copy(&b, c.in)
+		c.bufferChannel <- b.String()
+	}()
+}
+
+// キャプチャを停止する
+func (c *Capturer) StopCapturingStdout() string {
+	c.out.Close()
+	os.Stdout = c.saved
+	return <-c.bufferChannel
 }
