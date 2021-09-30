@@ -3,7 +3,7 @@
  *
  * @author    yasutakatou
  * @copyright 2021 yasutakatou
- * @license   xxx
+ * @license   Apache-2.0 License, BSD-3-Clause License
  */
 package main
 
