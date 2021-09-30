@@ -73,12 +73,145 @@ The following example shows how to set a high score for a stepping stone server 
 
 ### [Rules]
 
+This section describes the combination of files and command strings to be alerted, and the score to be deducted.
+
+```
+4000	NO	ls	passwd	shadow	resolv.conf
+1000	KILL	ssh	*
+```
+
+1. Score to be deducted
+2. KILL" to drop the process as soon as it is discovered, "NO" to keep it.
+3. Files to monitor
+4. String to be alerted in combination with the monitoring file
+
+note. 4. can be written in multiple tabs.
+
 ### [Triggers]
+
+Define the access that will trigger the file. For now, we'll use file and directory access. If you want to relax the rules for creation and deletion, you can do so in the
+
+[The hexadecimal version of the trigger list is here](https://github.com/torvalds/linux/blob/master/include/linux/fsnotify_backend.h).
+
+```
+#define FS_ACCESS		0x00000001	/* File was accessed */
+```
 
 ### [TimeDecrement]
 
+It is the sense of time and the score that is subtracted.
+In the example below, it decreases by 1 every 10 seconds.
+
+```
+10	1
+```
+
+This parameter is also used for the monitoring interval. Thus, a small value will cause fine-grained monitoring, increased processing, and increased logging.
+
 ### [LogDir]
+
+The directory where the alert logs for each server are saved.
 
 ### [noTrusts]
 
+This is the action to take when a score of zero occurs.
+The {} defined in the argument will be replaced with the IP address of the server and executed.
 
+```
+.*	echo {} >> noTrustLists
+```
+
+In this example, we will add the IP of the server where the zero score occurred to the specified file name.
+
+note. Based on the added IP, the idea of shutting down the server from the cloud API can be used to enhance security.
+
+## rules.ini
+
+It's a file with the server and the score.
+
+note. If you want to trust a server with a zero score again, please rewrite the score field in this file directly. Hot reload and monitoring will resume.
+
+```
+[Scores]
+172.22.28.236	998	DESKTOP-V58043T 5.10.16.3-microsoft-standard-WSL2Linux #1 SMP Fri Apr 2 22:23:49 UTC 2021 x86_64 localdomaininn
+```
+
+The string after the score is the result of uname.
+
+# options
+
+```ady@DESKTOP-V58043T:~/goTrust$ ./goTrust -h
+Usage of ./goTrust:
+  -allowOverride
+        [-allowOverride=trust file override mode (true is enable)]
+  -auto
+        [-auto=config auto read/write mode (true is enable)] (default true)
+  -client
+        [-client=client mode (true is enable)]
+  -debug
+        [-debug=debug mode (true is enable)]
+  -lock string
+        [-lock=lock file name and path] (default "lock")
+  -log
+        [-log=logging mode (true is enable)]
+  -port string
+        [-port=server port (default: :50005)] (default ":50005")
+  -replaceString string
+        [-replaceString= when no trust action, give ip paramater] (default "{}")
+  -rule string
+        [-rule=rules config file] (default "rules.ini")
+  -server string
+        [-server=connect server (default: 127.0.0.1:50005)] (default "127.0.0.1:50005")
+  -trust string
+        [-trust=trusts config file)] (default "trust.ini")
+```
+
+## -allowOverride
+
+Overwrite the information of a newly connected client if it already exists.
+
+## -auto
+
+config auto read/write mode.
+
+## -client
+
+start client mode.
+
+## -debug
+
+Run in the mode that outputs various logs.
+
+## -lock string
+
+Specify the lock file name.
+
+## -log
+
+Specify the log file name.
+
+## -port string
+
+port number
+
+## -replaceString string
+
+Define the string to be replaced by the execution result at actions.
+
+## -rule string
+
+Specify the rules file name.
+
+## -server string
+
+Defines the server to connect to when in client mode.
+
+## -trust string
+
+Specify the score file name.
+
+# license
+
+3-clause BSD License
+and
+Apache License Version 2.0
