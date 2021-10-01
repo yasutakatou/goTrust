@@ -19,11 +19,17 @@ normal access
 security incident!
 	cat /etc/shadow
 tool trapped access "/etc/shadow" and cat, more, less... read command check
+
+![1](https://user-images.githubusercontent.com/22161385/135618418-d8a041e1-48f5-4c37-a1da-5155c9049493.gif)
+
 - Matches the rules and originates from the score given to each server
 You can customize the score for each rule. In other words, the more critical the command, the higher the starting point.
 You can define rules to stop the process as soon as a dangerous command is executed.
-- You can reduce your score over time. Can put an expiration date on old servers.
 - Automatically stops processes started on servers that have lost their scores.
+
+![2](https://user-images.githubusercontent.com/22161385/135618448-a5ed093b-aa07-475f-bd1f-77e168e4f7b2.gif)
+
+- You can reduce your score over time. Can put an expiration date on old servers.
 - You can define specific actions for a server that has a zero score.
 
 # Usecase
