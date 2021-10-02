@@ -2,71 +2,81 @@
 **Zero Trust for Legacy Linux by Golang**
 
 # Solution
-Do you have an old Linux system running in your company?<br>
+Do you have an *old Linux system* running in your company?<br>
 You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.<br>
 Moreover, the support has expired and it is vulnerable.<br>
 No matter how new you make the front end, that old system will continue to exist as a security hole.<br>
 You are told by your boss.<br>
-"I want to eliminate the security risk on this server."<br>
+*"I want to eliminate the security risk on this server."*<br>
 You will be distressed.<br>
-This tool, which implements a simple zero-trust model, will surely help you with your problem!<br>
-And all it takes is the placement of a single binary to make this happen for free!<br>
+This legacy systemcan't use latest EDR by not support, and can't pay cost for legacy.<br>
+I wish they'd just break! No, let's just break it.<br>
+<br>
+**Hold on!**<br>
+<br>
+This tool, which implements a **simple zero-trust model**, will surely help you with your problem!<br>
+And all it takes is the placement of a **single binary to make this happen for free**!<br>
 
 # Feature
-- Monitors access to specific files and checks for executed commands triggered by them<br>
+- Monitors access to **specific files** and **checks for executed commands** triggered by them<br>
+
 normal access<br>
-	cat /tmp/hogefuga.txt<br>
+　cat /tmp/hogefuga.txt<br>
 security incident!<br>
-	cat /etc/shadow<br>
+　cat /etc/shadow<br>
 tool trapped access "/etc/shadow" and cat, more, less... read command check<br>
 
 ![1](https://user-images.githubusercontent.com/22161385/135618418-d8a041e1-48f5-4c37-a1da-5155c9049493.gif)
 
-- Matches the rules and originates from the score given to each server<br>
-You can customize the score for each rule. In other words, the more critical the command, the higher the starting point.<br>
-You can define rules to stop the process as soon as a dangerous command is executed.<br>
-- Automatically stops processes started on servers that have lost their scores.<br>
+- **Matches the rules** and originates from **the score** given to each server<br>
+
+You can **customize the score** for each rule. In other words, the more critical the command, the higher the starting point.<br>
+You can define rules to **stop the process** as soon as a dangerous command is executed.<br>
+
+- **Automatically stops processes** started on servers that have lost their scores.<br>
 
 ![2](https://user-images.githubusercontent.com/22161385/135618448-a5ed093b-aa07-475f-bd1f-77e168e4f7b2.gif)
 
-- You can reduce your score over time. Can put an expiration date on old servers.<br>
-- You can define specific actions for a server that has a zero score.<br>
+- You can **reduce your score over time**. Can put an expiration date on old servers.<br>
+
+- You can define **specific actions** for a server that has a zero score.<br>
 
 # Architecture
 
-1. The client connects to the server using gRPC　(Bidirectional streaming RPC)<br>
+1. The client connects to the server using **gRPC**　(**Bidirectional streaming RPC**)<br>
 note) gRPC is selected for frequent and fast communication to reduce communication overhead<br>
 Client<br>
-  ↓ gRPC<br>
+　↓　gRPC<br>
 Server<br>
 
 2. Get the rules that will be triggered from the server. It then monitors the target file accesses and sends the command line string of the process to the server when an access comes in.<br>
-note) We selected inotify to detect file access. It's been around for a long time, and it's leak-proof and reliable.<br>
+note) We selected **inotify** to detect file access. It's been around for a long time, and it's leak-proof and reliable.<br>
 Client<br>
-  ↓ Trigger File, and Command line String<br>
+　↓　Trigger File, and Command line String<br>
 Server<br>
 
 3. The server evaluates the rules it receives and subtracts scores from the clients it manages. If necessary, it will issue an order to the client to stop the process.<br>
-note) The server doubles as both an enforcer and a trust engine. It should be split for security and load reasons, but it's hard to develop, so we simplified it.　:)<br>
+note) The server doubles as both an enforcer and a trust engine. It should be split for security and load reasons, but it's hard to develop, so we simplified it.　**:)**<br>
 Client<br>
-  ↑ gRPC<br>
+　↑　gRPC<br>
 Server<br>
 
-4. If the score is zero, the server will send to the client that it does not trust it. The client will go into a mode where it will stop all processes except the one it remembered when the agent started.<br>
-note) This mode will continue until the credit score is higher than zero. The score will also decrease as the operation time increases.<br>
+4. If the score is zero, the server will send to the client that it does not trust it. The client will go into a mode where it will stop all processes except the one it remembered **when the agent started**.<br>
+note) This mode will **continue until the credit score is higher than zero**. The score will also decrease as the operation time increases.<br>
 Client<br>
-  ↑ gRPC<br>
+　↑　gRPC<br>
 Server<br>
 
 
 # Usecase
 1. Place the tool on the server you want to monitor, and set it to run when the server starts.
-2. Define the rules you want to place in the monitoring target on the management server.
+2. **Define the rules** you want to place in the monitoring target on the management server.
 3. Run it against the monitoring server, which will send logs matching the rules via gRPC communication.
-4. Servers that run dangerous commands or run out of time will get a zero score, so please receive notifications via Slack or other means.
-5. You can't move anything anymore, so quarantine and forensic. If everything is fine, fix the score and return to normal operation.
+4. Servers that run dangerous commands or run out of time will get a zero score, so please **receive notifications via Slack or other means**.
+5. You can't move anything anymore, so **quarantine and forensic**. If everything is fine, fix the score and return to normal operation.
 
 # installation
+
 If you want to put it under the path, you can use the following.
 
 ```
@@ -85,18 +95,19 @@ go build .
 
 # config file
 
-Configs format is tab split values. The definition is ignore if you put sharp(#) at the beginning.
+Configs format is **tab split values**. The definition is ignore if you put **sharp(#)** at the beginning.
 
-auto read suppot
-config file supported auto read. so, you rewrite config file, tool not necessaly rerun, tool just this.
+### auto read suppot
+**config file supported auto read. so, you rewrite config file, tool not necessaly rerun, tool just this**.
 
 ## rules.ini
 
-This config will write the rules that apply to the server.
+This config will write **the rules** that apply to the server.
 
 ### [Trusts]
-Set the initial score value for each IP.
 
+Set the **initial score** value for each IP.<br>
+<br>
 The following example shows how to set a high score for a stepping stone server that is used by multiple people, and a low score for the other servers because they have few logins.
 
 ```
@@ -106,23 +117,23 @@ The following example shows how to set a high score for a stepping stone server 
 
 ### [Rules]
 
-This section describes the combination of files and command strings to be alerted, and the score to be deducted.
+This section describes the combination of **files and command strings to be alerted**, and the score to be deducted.<br>
 
 ```
 4000	NO	ls	passwd	shadow	resolv.conf
 1000	KILL	ssh	*
 ```
 
-1. Score to be deducted
-2. KILL" to drop the process as soon as it is discovered, "NO" to keep it.
-3. Files to monitor
-4. String to be alerted in combination with the monitoring file
+1. Score to be **deducted**.
+2. KILL to drop the process as soon as it is discovered, "NO" to keep it.
+3. Files to monitor. (**Auto-detect without writing the full path**)
+4. String to be alerted in **combination with the monitoring file**.
 
-note. 4. can be written in multiple tabs.
+note) **4. can be written in multiple tabs**.<br>
 
 ### [Triggers]
 
-Define the access that will trigger the file. For now, we'll use file and directory access. If you want to relax the rules for creation and deletion, you can do so in the
+Define the access that will trigger the file. For now, we'll use **file and directory access**. If you want to relax the rules for creation and deletion, you can do so in the<br>
 
 [The hexadecimal version of the trigger list is here](https://github.com/torvalds/linux/blob/master/include/linux/fsnotify_backend.h).
 
@@ -130,50 +141,52 @@ Define the access that will trigger the file. For now, we'll use file and direct
 #define FS_ACCESS		0x00000001	/* File was accessed */
 ```
 
+Please convert these parts into decimal numbers.<br>
+
 ### [TimeDecrement]
 
-It is the sense of time and the score that is subtracted.
-In the example below, it decreases by 1 every 10 seconds.
+It is the sense of time and the score that is **subtracted**.<br>
+In the example below, it decreases by 1 every 10 seconds.<br>
 
 ```
 10	1
 ```
 
-This parameter is also used for the monitoring interval. Thus, a small value will cause fine-grained monitoring, increased processing, and increased logging.
+note) This parameter is also used for **the monitoring interval**. Thus, a small value will cause fine-grained monitoring, increased processing, and increased logging.
 
 ### [LogDir]
 
-The directory where the alert logs for each server are saved.
+This define is **directory name** where the alert logs for each server are saved by **each ip**.
 
 ### [noTrusts]
 
-This is the action to take when a score of zero occurs.
-The {} defined in the argument will be replaced with the IP address of the server and executed.
+This is the **action** to take when a score of **zero occurs**.<br>
+The **{}** defined in the argument will be replaced with the **IP address** of the server and executed.
 
 ```
 .*	echo {} >> noTrustLists
 ```
 
-In this example, we will add the IP of the server where the zero score occurred to the specified file name.
-
-note. Based on the added IP, the idea of shutting down the server from the cloud API can be used to enhance security.
+In this example, we will add the **IP of the server where the zero score occurred** to the specified file name.<br>
+<br>
+note) Based on the added IP, the idea of shutting down the server from the cloud API can be used to enhance security.
 
 ## rules.ini
 
-It's a file with the server and the score.
-
-note. If you want to trust a server with a zero score again, please rewrite the score field in this file directly. Hot reload and monitoring will resume.
+It's a file with the **server and the score**.<br>
+<br>
+note) **If you want to trust a server with a zero score again, please rewrite the score field in this file directly. Hot reload and trusting will resume**.
 
 ```
 [Scores]
 172.22.28.236	998	DESKTOP-V58043T 5.10.16.3-microsoft-standard-WSL2Linux #1 SMP Fri Apr 2 22:23:49 UTC 2021 x86_64 localdomaininn
 ```
 
-The string after the score is the result of uname.
+The string after the score is the result of **uname**.
 
 # options
 
-```ady@DESKTOP-V58043T:~/goTrust$ ./goTrust -h
+```
 Usage of ./goTrust:
   -allowOverride
         [-allowOverride=trust file override mode (true is enable)]
@@ -201,15 +214,21 @@ Usage of ./goTrust:
 
 ## -allowOverride
 
-Overwrite the information of a newly connected client if it already exists.
+This option is **allow overwrite** the information of connecting client if it already exists.<br>
+<br>
+note) This is useful if you want to use it to restart the agent every day.
 
 ## -auto
 
-config auto read/write mode.
+config auto read/write mode.<br>
+<br>
+note) In both **trust.ini** and **rule.ini**
 
 ## -client
 
-start client mode.
+start client mode.<br>
+<br>
+note) Without this option, it will start in **server mode**.
 
 ## -debug
 
@@ -217,7 +236,9 @@ Run in the mode that outputs various logs.
 
 ## -lock string
 
-Specify the lock file name.
+Specify the lock file name.<br>
+<br>
+note) Perform lock processing when updating **trust.ini**
 
 ## -log
 
@@ -225,23 +246,37 @@ Specify the log file name.
 
 ## -port string
 
-port number
+port number<br>
+<br>
+note) Used when in **server mode**.
 
 ## -replaceString string
 
-Define the string to be replaced by the execution result at actions.
+Define the string to be replaced by the execution result at actions.<br>
+<br>
+note) It's the **{}** in **[noTrusts]**.
+
+```
+.*	echo {} >> noTrustLists
+```
 
 ## -rule string
 
-Specify the rules file name.
+Specify the rules(**rule.ini**) file name.
 
 ## -server string
 
-Defines the server to connect to when in client mode.
+Defines the server to connect to when in client mode.<br>
+<br>
+note) Please write the **IP and port number separated by a colon**.
+
+```
+-server=127.0.0.1:50005
+```
 
 ## -trust string
 
-Specify the score file name.
+Specify the score(**trust.ini**) file name.
 
 # license
 
