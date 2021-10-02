@@ -1,62 +1,62 @@
 # goTrust (document writing..)
-*Zero Trust for Legacy Linux by Golang*
+**Zero Trust for Legacy Linux by Golang**
 
 # Solution
-Do you have an old Linux system running in your company?
-You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.
-Moreover, the support has expired and it is vulnerable.
-No matter how new you make the front end, that old system will continue to exist as a security hole.
-You are told by your boss.
-"I want to eliminate the security risk on this server."
-You will be distressed.
-This tool, which implements a simple zero-trust model, will surely help you with your problem!
-And all it takes is the placement of a single binary to make this happen for free!
+Do you have an old Linux system running in your company?<br>
+You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.<br>
+Moreover, the support has expired and it is vulnerable.<br>
+No matter how new you make the front end, that old system will continue to exist as a security hole.<br>
+You are told by your boss.<br>
+"I want to eliminate the security risk on this server."<br>
+You will be distressed.<br>
+This tool, which implements a simple zero-trust model, will surely help you with your problem!<br>
+And all it takes is the placement of a single binary to make this happen for free!<br>
 
 # Feature
-- Monitors access to specific files and checks for executed commands triggered by them
-normal access
-	cat /tmp/hogefuga.txt
-security incident!
-	cat /etc/shadow
-tool trapped access "/etc/shadow" and cat, more, less... read command check
+- Monitors access to specific files and checks for executed commands triggered by them<br>
+normal access<br>
+	cat /tmp/hogefuga.txt<br>
+security incident!<br>
+	cat /etc/shadow<br>
+tool trapped access "/etc/shadow" and cat, more, less... read command check<br>
 
 ![1](https://user-images.githubusercontent.com/22161385/135618418-d8a041e1-48f5-4c37-a1da-5155c9049493.gif)
 
-- Matches the rules and originates from the score given to each server
-You can customize the score for each rule. In other words, the more critical the command, the higher the starting point.
-You can define rules to stop the process as soon as a dangerous command is executed.
-- Automatically stops processes started on servers that have lost their scores.
+- Matches the rules and originates from the score given to each server<br>
+You can customize the score for each rule. In other words, the more critical the command, the higher the starting point.<br>
+You can define rules to stop the process as soon as a dangerous command is executed.<br>
+- Automatically stops processes started on servers that have lost their scores.<br>
 
 ![2](https://user-images.githubusercontent.com/22161385/135618448-a5ed093b-aa07-475f-bd1f-77e168e4f7b2.gif)
 
-- You can reduce your score over time. Can put an expiration date on old servers.
-- You can define specific actions for a server that has a zero score.
+- You can reduce your score over time. Can put an expiration date on old servers.<br>
+- You can define specific actions for a server that has a zero score.<br>
 
 # Architecture
 
-1. The client connects to the server using gRPC　(Bidirectional streaming RPC)
-note) gRPC is selected for frequent and fast communication to reduce communication overhead
-Client
-  ↓ gRPC
-Server
+1. The client connects to the server using gRPC　(Bidirectional streaming RPC)<br>
+note) gRPC is selected for frequent and fast communication to reduce communication overhead<br>
+Client<br>
+  ↓ gRPC<br>
+Server<br>
 
-2. Get the rules that will be triggered from the server. It then monitors the target file accesses and sends the command line string of the process to the server when an access comes in.
-note) We selected inotify to detect file access. It's been around for a long time, and it's leak-proof and reliable.
-Client
-  ↓ Trigger File, and Command line String
-Server
+2. Get the rules that will be triggered from the server. It then monitors the target file accesses and sends the command line string of the process to the server when an access comes in.<br>
+note) We selected inotify to detect file access. It's been around for a long time, and it's leak-proof and reliable.<br>
+Client<br>
+  ↓ Trigger File, and Command line String<br>
+Server<br>
 
-3. The server evaluates the rules it receives and subtracts scores from the clients it manages. If necessary, it will issue an order to the client to stop the process.
-note) The server doubles as both an enforcer and a trust engine. It should be split for security and load reasons, but it's hard to develop, so we simplified it.　:)
-Client
-  ↑ gRPC
-Server
+3. The server evaluates the rules it receives and subtracts scores from the clients it manages. If necessary, it will issue an order to the client to stop the process.<br>
+note) The server doubles as both an enforcer and a trust engine. It should be split for security and load reasons, but it's hard to develop, so we simplified it.　:)<br>
+Client<br>
+  ↑ gRPC<br>
+Server<br>
 
-4. If the score is zero, the server will send to the client that it does not trust it. The client will go into a mode where it will stop all processes except the one it remembered when the agent started.
-note) This mode will continue until the credit score is higher than zero. The score will also decrease as the operation time increases.
-Client
-  ↑ gRPC
-Server
+4. If the score is zero, the server will send to the client that it does not trust it. The client will go into a mode where it will stop all processes except the one it remembered when the agent started.<br>
+note) This mode will continue until the credit score is higher than zero. The score will also decrease as the operation time increases.<br>
+Client<br>
+  ↑ gRPC<br>
+Server<br>
 
 
 # Usecase
