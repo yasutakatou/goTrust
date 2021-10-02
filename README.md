@@ -32,6 +32,33 @@ You can define rules to stop the process as soon as a dangerous command is execu
 - You can reduce your score over time. Can put an expiration date on old servers.
 - You can define specific actions for a server that has a zero score.
 
+# Architecture
+
+1. The client connects to the server using gRPC　(Bidirectional streaming RPC)
+note) gRPC is selected for frequent and fast communication to reduce communication overhead
+Client
+  ↓ gRPC
+Server
+
+2. Get the rules that will be triggered from the server. It then monitors the target file accesses and sends the command line string of the process to the server when an access comes in.
+note) We selected inotify to detect file access. It's been around for a long time, and it's leak-proof and reliable.
+Client
+  ↓ Trigger File, and Command line String
+Server
+
+3. The server evaluates the rules it receives and subtracts scores from the clients it manages. If necessary, it will issue an order to the client to stop the process.
+note) The server doubles as both an enforcer and a trust engine. It should be split for security and load reasons, but it's hard to develop, so we simplified it.　:)
+Client
+  ↑ gRPC
+Server
+
+4. If the score is zero, the server will send to the client that it does not trust it. The client will go into a mode where it will stop all processes except the one it remembered when the agent started.
+note) This mode will continue until the credit score is higher than zero. The score will also decrease as the operation time increases.
+Client
+  ↑ gRPC
+Server
+
+
 # Usecase
 1. Place the tool on the server you want to monitor, and set it to run when the server starts.
 2. Define the rules you want to place in the monitoring target on the management server.
