@@ -1,5 +1,5 @@
 /*
- * Zero Trust for Legacy Linux by Golang
+ * Zero Trust tool for Linux by Golang
  *
  * @author    yasutakatou
  * @copyright 2021 yasutakatou
