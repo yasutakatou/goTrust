@@ -1,34 +1,34 @@
 # goTrust (document writing..)
-**Zero Trust for Legacy Linux by Golang**
+**Zero Trust tool for Linux by Golang**
 
 # Solution
 Do you have an *old Linux system* running in your company?<br>
 You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.<br>
 Moreover, the support has expired and it is vulnerable.<br>
-No matter how new you make the front end, that old system will continue to exist as a security hole.<br>
+No matter how new you make the front end,in backend that old system will continue to exist as a security hole.<br>
 You are told by your boss.<br>
-*"I want to eliminate the security risk on this server."*<br>
+*"eliminate the security risk on this server!"*<br>
 You will be distressed.<br>
-This legacy systemcan't use latest EDR by not support, and can't pay cost for legacy.<br>
+This legacy systemcan't use latest EDR by not support, and can't pay cost for refactor just now.<br>
 I wish they'd just break! No, let's just break it.<br>
 <br>
-**Hold on!**<br>
+**Stopping!**<br>
 <br>
 This tool, which implements a **simple zero-trust model**, will surely help you with your problem!<br>
-And all it takes is the placement of a **single binary to make this happen for free**!<br>
+And all it takes is the placement of **single binary, cost free**!<br>
 
 # Feature
-- Monitors access to **specific files** and **checks for executed commands** triggered by them<br>
+- Monitors access to **specific files** and **checks for executed command line string** triggered by them<br>
 
 normal access<br>
 　cat /tmp/hogefuga.txt<br>
 security incident!<br>
 　cat /etc/shadow<br>
-tool trapped access "/etc/shadow" and cat, more, less... read command check<br>
+note) access "/etc/shadow" and cat, more, less... read file<br>
 
 ![1](https://user-images.githubusercontent.com/22161385/135618418-d8a041e1-48f5-4c37-a1da-5155c9049493.gif)
 
-- **Matches the rules** and originates from **the score** given to each server<br>
+- **Matches the rules** and mange **the score** given to each server<br>
 
 You can **customize the score** for each rule. In other words, the more critical the command, the higher the starting point.<br>
 You can define rules to **stop the process** as soon as a dangerous command is executed.<br>
@@ -39,14 +39,14 @@ You can define rules to **stop the process** as soon as a dangerous command is e
 
 - You can **reduce your score over time**. Can put an expiration date on old servers.<br>
 
-- You can define **specific actions** for a server that has a zero score.<br>
+- You can define **specific execution** for a server that has a zero score.<br>
 
 # Architecture
 
 1. The client connects to the server using **gRPC**　(**Bidirectional streaming RPC**)<br>
-note) gRPC is selected for frequent and fast communication to reduce communication overhead<br>
+note) I selected gRPC. for must frequent and fast communication to can be dreduce communication overhead<br>
 Client<br>
-　↓　gRPC<br>
+　↓　gRPC　communication start<br>
 Server<br>
 
 2. Get the rules that will be triggered from the server. It then monitors the target file accesses and sends the command line string of the process to the server when an access comes in.<br>
@@ -58,8 +58,10 @@ Server<br>
 3. The server evaluates the rules it receives and subtracts scores from the clients it manages. If necessary, it will issue an order to the client to stop the process.<br>
 note) The server doubles as both an enforcer and a trust engine. It should be split for security and load reasons, but it's hard to develop, so we simplified it.　**:)**<br>
 Client<br>
-　↑　gRPC<br>
+　↑　rule detection, and action send<br>
 Server<br>
+
+- wip
 
 4. If the score is zero, the server will send to the client that it does not trust it. The client will go into a mode where it will stop all processes except the one it remembered **when the agent started**.<br>
 note) This mode will **continue until the credit score is higher than zero**. The score will also decrease as the operation time increases.<br>
