@@ -61,21 +61,21 @@ Client<br>
 　↑　rule detection, and action send<br>
 Server<br>
 
-- wip
-
 4. If the score is zero, the server will send to the client that it does not trust it. The client will go into a mode where it will stop all processes except the one it remembered **when the agent started**.<br>
-note) This mode will **continue until the credit score is higher than zero**. The score will also decrease as the operation time increases.<br>
+note) This mode will **continue until the credit score is higher than 1**.<br>
 Client<br>
-　↑　gRPC<br>
+　↑　no trust command<br>
 Server<br>
 
+note) The score will decrease as the os running time increases same too.
 
 # Usecase
-1. Place the tool on the server you want to monitor, and set it to run when the server starts.
-2. **Define the rules** you want to place in the monitoring target on the management server.
-3. Run it against the monitoring server, which will send logs matching the rules via gRPC communication.
-4. Servers that run dangerous commands or run out of time will get a zero score, so please **receive notifications via Slack or other means**.
-5. You can't move anything anymore, so **quarantine and forensic**. If everything is fine, fix the score and return to normal operation.
+1. client) Place the tool on the server you want to monitor, and set it to run when the server starts.
+2. server) **Define the rules** you want to place in the monitoring target into the management server.
+3. client) Connect to the management server, which will send process string matching the rules via gRPC communication from client.
+4. client) Servers that run dangerous commands or run out of time will get a zero score, so please **receive notifications via Slack or other means**. (trustini.ini -> [noTrusts])
+5. client) You can't run anymore all proccess, so **quarantine and forensic**.
+6. server) If everything is fine, fix the score and return to normal operation.
 
 # installation
 
@@ -93,24 +93,25 @@ cd goTrust
 go build .
 ```
 
-[or download binary from release page](https://github.com/yasutakatou/IMS/releases). save binary file, copy to entryed execute path directory.
+[or download binary from release page](https://github.com/yasutakatou/goTrust/releases). save binary file, copy to entryed execute path directory.
 
 # config file
 
 Configs format is **tab split values**. The definition is ignore if you put **sharp(#)** at the beginning.
 
-### auto read suppot
-**config file supported auto read. so, you rewrite config file, tool not necessaly rerun, tool just this**.
+### auto read support
+
+**config file supported auto read. so, you rewrite config file, tool not necessaly rerun**.
 
 ## rules.ini
 
-This config will write **the rules** that apply to the server.
+This config will write **the rules** that apply to the client.
 
 ### [Trusts]
 
 Set the **initial score** value for each IP.<br>
 <br>
-The following example shows how to set a high score for a stepping stone server that is used by multiple people, and a low score for the other servers because they have few logins.
+The following example shows how to set a high default score for bastion server(192.168.0.1) that is used by multiple people, and a low score for the other servers because they have few operations.
 
 ```
 192.168.0.1	10000
@@ -119,7 +120,7 @@ The following example shows how to set a high score for a stepping stone server 
 
 ### [Rules]
 
-This section describes the combination of **files and command strings to be alerted**, and the score to be deducted.<br>
+This section define the combination of **files and command strings to be alerted**, and the score to be deducted.<br>
 
 ```
 4000	NO	ls	passwd	shadow	resolv.conf
@@ -127,15 +128,15 @@ This section describes the combination of **files and command strings to be aler
 ```
 
 1. Score to be **deducted**.
-2. KILL to drop the process as soon as it is discovered, "NO" to keep it.
-3. Files to monitor. (**Auto-detect without writing the full path**)
-4. String to be alerted in **combination with the monitoring file**.
+2. "KILL" to stop the target process as soon as it is discovered, "NO" to keep run it.
+3. Files to monitor. (**When can execute file, Auto-detect without writing the full path**)
+4. String to be checked in **combination with the monitoring file**.
 
-note) **4. can be written in multiple tabs**.<br>
+note) **4. can be written to multiple tabs**.<br>
 
 ### [Triggers]
 
-Define the access that will trigger the file. For now, we'll use **file and directory access**. If you want to relax the rules for creation and deletion, you can do so in the<br>
+Define the access that will trigger the alert. By default, we'll use **file and directory access**. If you want to change the rules to creation or deletion, you can check the following page.
 
 [The hexadecimal version of the trigger list is here](https://github.com/torvalds/linux/blob/master/include/linux/fsnotify_backend.h).
 
@@ -143,48 +144,51 @@ Define the access that will trigger the file. For now, we'll use **file and dire
 #define FS_ACCESS		0x00000001	/* File was accessed */
 ```
 
-Please convert these parts into decimal numbers.<br>
+note) Please convert these value into decimal numbers.<br>
 
 ### [TimeDecrement]
 
-It is the sense of time and the score that is **subtracted**.<br>
+This value is **decrease score of time**.<br>
 In the example below, it decreases by 1 every 10 seconds.<br>
+
 
 ```
 10	1
 ```
 
-note) This parameter is also used for **the monitoring interval**. Thus, a small value will cause fine-grained monitoring, increased processing, and increased logging.
+note) This parameter is also used for **the monitoring interval**. Thus, a small value will cause more grained monitoring, increased processing, and increased logging.
 
 ### [LogDir]
 
-This define is **directory name** where the alert logs for each server are saved by **each ip**.
+This define is **directory name** where the alert logs.<br>
+<br>
+note)  for each server are saved by **each ip**.
 
 ### [noTrusts]
 
-This is the **action** to take when a score of **zero occurs**.<br>
+This is the **command operation** to take when a score of **zero occurs**.<br>
 The **{}** defined in the argument will be replaced with the **IP address** of the server and executed.
 
 ```
 .*	echo {} >> noTrustLists
 ```
 
-In this example, we will add the **IP of the server where the zero score occurred** to the specified file name.<br>
+In this example, we will output the **IP of the server where the zero score occurred** to the specified file name.<br>
 <br>
 note) Based on the added IP, the idea of shutting down the server from the cloud API can be used to enhance security.
 
 ## rules.ini
 
-It's a file with the **server and the score**.<br>
+It's a file for manage **server and the score**.<br>
 <br>
-note) **If you want to trust a server with a zero score again, please rewrite the score field in this file directly. Hot reload and trusting will resume**.
+note) **If you want to trust a server with a zero score again, please rewrite the score field in this file directly. **.
 
 ```
 [Scores]
 172.22.28.236	998	DESKTOP-V58043T 5.10.16.3-microsoft-standard-WSL2Linux #1 SMP Fri Apr 2 22:23:49 UTC 2021 x86_64 localdomaininn
 ```
 
-The string after the score is the result of **uname**.
+The string after the score value is the result of **system uname**.
 
 # options
 
@@ -216,15 +220,15 @@ Usage of ./goTrust:
 
 ## -allowOverride
 
-This option is **allow overwrite** the information of connecting client if it already exists.<br>
+This option is **allow overwrite** the information of just connecting client if it already exists in trust.ini.<br>
 <br>
-note) This is useful if you want to use it to restart the agent every day.
+note) This is useful if you want to use it to restart the agent in regularly.
 
 ## -auto
 
 config auto read/write mode.<br>
 <br>
-note) In both **trust.ini** and **rule.ini**
+note) Its enable in both **trust.ini** and **rule.ini**
 
 ## -client
 
@@ -240,7 +244,7 @@ Run in the mode that outputs various logs.
 
 Specify the lock file name.<br>
 <br>
-note) Perform lock processing when updating **trust.ini**
+note) Used to perform lock processing when updating **trust.ini**
 
 ## -log
 
@@ -268,9 +272,9 @@ Specify the rules(**rule.ini**) file name.
 
 ## -server string
 
-Defines the server to connect to when in client mode.<br>
+Define the string to be replaced when **no trust** action.<br>
 <br>
-note) Please write the **IP and port number separated by a colon**.
+note) It's the **{}** in **[noTrusts]**.
 
 ```
 -server=127.0.0.1:50005
