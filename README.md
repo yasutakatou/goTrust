@@ -2,20 +2,13 @@
 **Zero Trust tool for Linux by Golang**
 
 # Solution
-Do you have an *old Linux system* running in your company?<br>
-You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.<br>
-Moreover, the support has expired and it is vulnerable.<br>
-No matter how new you make the front end,in backend that old system will continue to exist as a security hole.<br>
-You are told by your boss.<br>
-*"eliminate the security risk on this server!"*<br>
-You will be distressed.<br>
-This legacy systemcan't use latest EDR by not support, and can't pay cost for refactor just now.<br>
-I wish they'd just break! No, let's just break it.<br>
+　Do you have an *old Linux system* running in your company?　You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.　Moreover, the support has expired and it is vulnerable.　No matter how new you make the front end,in backend that old system will continue to exist as a security hole.<br>
+　You are told by your boss.　*"eliminate the security risk on this server!"*<br>
+　You will be distressed.　This legacy systemcan't use latest EDR by not support, and can't pay cost for refactor just now.　I wish they'd just break! No, let's just break it!!!!!!!<br>
 <br>
 **Stopping!**<br>
 <br>
-This tool, which implements a **simple zero-trust model**, will surely help you with your problem!<br>
-And all it takes is the placement of **single binary, cost free**!<br>
+　This tool, which implements a **simple zero-trust model**, will surely help you with your problem!　And all it takes is the placement of **single binary, cost free**!<br>
 
 # Feature
 - Monitors access to **specific files** and **checks for executed command line string** triggered by them<br>
@@ -30,8 +23,7 @@ note) access "/etc/shadow" and cat, more, less... read file<br>
 
 - **Matches the rules** and mange **the score** given to each server<br>
 
-You can **customize the score** for each rule. In other words, the more critical the command, the higher the starting point.<br>
-You can define rules to **stop the process** as soon as a dangerous command is executed.<br>
+You can **customize the score** for each rule. In other words, the more critical the command, the higher the starting point.　You can define rules to **stop the process** as soon as a dangerous command is executed.<br>
 
 - **Automatically stops processes** started on servers that have lost their scores.<br>
 
@@ -166,8 +158,7 @@ note)  for each server are saved by **each ip**.
 
 ### [noTrusts]
 
-This is the **command operation** to take when a score of **zero occurs**.<br>
-The **{}** defined in the argument will be replaced with the **IP address** of the server and executed.
+This is the **command operation** to take when a score of **zero occurs**.　The **{}** defined in the argument will be replaced with the **IP address** of the server and executed.
 
 ```
 .*	echo {} >> noTrustLists
