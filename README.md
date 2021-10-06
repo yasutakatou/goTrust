@@ -1,4 +1,4 @@
-# goTrust (document writing..)
+# goTrust
 **Zero Trust tool for Linux by Golang**
 
 # Solution
