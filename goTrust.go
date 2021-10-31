@@ -78,6 +78,7 @@ type clientRuleData struct {
 	EXEC    string
 	CMDLINE []string
 	NOPATH  string
+	SCORE   []int
 }
 
 type responseData struct {
@@ -125,6 +126,7 @@ var (
 	filterCount                                                        int
 	filters                                                            []filterData
 	allows                                                             []string
+	dataScanCount                                                      int
 )
 
 func main() {
@@ -142,6 +144,9 @@ func main() {
 	_allowOverride := flag.Bool("allowOverride", false, "[-allowOverride=trust file override mode (true is enable)]")
 	_clientDisconnect := flag.Int("clientDisconnect", 60, "[-clientDisconnect=client live interval ]")
 	_filterCount := flag.Int("filterCount", 3, "[-filterCount=allow connect retrys.]")
+	_dataScanCount := flag.Int("dataScanCount", 1000, "[-dataScanCount=data score count lines.]")
+	_cert := flag.String("cert", "localhost.pem", "[-cert=ssl_certificate file path]")
+	_key := flag.String("key", "localhost-key.pem", "[-key=ssl_certificate_key file path]")
 
 	flag.Parse()
 
@@ -152,6 +157,7 @@ func main() {
 	replaceStr = string(*_replaceStr)
 	allowOverride = bool(*_allowOverride)
 	clientDisconnect = int(*_clientDisconnect)
+	dataScanCount = int(*_dataScanCount)
 	serverSecret = string(*_secret)
 	filterCount = int(*_filterCount)
 
@@ -160,7 +166,7 @@ func main() {
 		clientStart(*_server)
 	} else {
 		os.Remove(lockFile)
-		serverStart(*_port, *_Rule, *_autoRW)
+		serverStart(*_port, *_Rule, *_autoRW, *_cert, *_key)
 	}
 
 	for {
@@ -241,9 +247,9 @@ func clientStart(server string) {
 				log.Fatal(err)
 			}
 		default:
-			if stra := searchPath(resp.Cmd); stra != "" {
+			if stra, datas := searchPath(resp.Cmd); stra != "" {
 				strb := strings.Split(resp.Str, "\t")
-				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
+				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd, SCORE: datas})
 			}
 		}
 	}
@@ -538,7 +544,7 @@ func respRules(srv pb.Logging_LogServer) {
 	sendServerMsg(srv, endRuleCmd, "")
 }
 
-func serverStart(port, config string, autoRW bool) {
+func serverStart(port, config string, autoRW bool, cert, key string) {
 	if Exists(config) == true {
 		loadConfig(config, true)
 	} else {
@@ -689,8 +695,9 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			resetRetry(r.RemoteAddr)
 		}
+		data = &responseData{response: resp}
 	} else {
-		if checkRetrys(p.Password, r.RemoteAddr) == false {
+		if checkRetrys(r.RemoteAddr) == false {
 			debugLog(r.RemoteAddr + ": over retrys")
 			data = &responseData{response: "error " + r.RemoteAddr + " : over retrys"}
 		} else {
@@ -698,7 +705,6 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	data = &responseData{response: resp}
 	outputJson, err = json.Marshal(data)
 	if err != nil {
 		w.Write([]byte("internal server error"))
@@ -980,27 +986,28 @@ func loadConfig(trustFile string, tFlag bool) {
 	}
 }
 
-func searchPath(filename string) (string, bool, []int) {
+func searchPath(filename string) (string, []int) {
 	paths := strings.Split(os.Getenv("PATH"), ":")
 	for _, cmd := range paths {
 		if Exists(cmd + "/" + filename) {
 			debugLog("Command Exists! : " + cmd + "/" + filename)
-			return cmd + "/" + filename, false, nil
+			return cmd + "/" + filename, nil
 		}
 	}
 
 	if Exists(filename) {
 		debugLog("File Exists! : " + filename)
 		datas := scanDataScore(filename)
-		return filename, ture, datas
+		return filename, datas
 	}
 
 	debugLog("Not Exists! : " + filename)
-	return "", false, nil
+	return "", nil
 }
 
 func scanDataScore(filename string) []int {
-	datas := make([]string, len(dataScores))
+	count := 0
+	datas := make([]int, len(dataScores))
 
 	var fp *os.File
 	var err error
@@ -1014,14 +1021,20 @@ func scanDataScore(filename string) []int {
 
 	scanner := bufio.NewScanner(fp)
 	for scanner.Scan() {
+		if count > dataScanCount {
+			break
+		}
 		readData := scanner.Text()
 		sct := scanStr(readData)
 		if sct > 0 {
 			datas[sct-1] = datas[sct-1] + dataScores[sct-1].SCORE
 		}
+		count = count + 1
 	}
 	return datas
 }
+
+func scanStr(readStr string)
 
 func setStructs(configType, datas string, flag int) {
 	debugLog(" -- " + configType + " --")
@@ -1075,11 +1088,6 @@ func setStructs(configType, datas string, flag int) {
 			case 6:
 				if len(strs) == 2 {
 					noTrusts = append(noTrusts, noTrustData{FILTER: strs[0], CMD: strs[1]})
-					debugLog(v)
-				}
-			case 7:
-				if len(strs) == 2 {
-					noTrusts = append(noTrusts, dataScores{SCORE: strs[0], WORD: strs[1]})
 					debugLog(v)
 				}
 			case 9:
