@@ -10,12 +10,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -39,6 +41,11 @@ type Capturer struct {
 	bufferChannel chan string
 	out           *os.File
 	in            *os.File
+}
+
+type dataScores struct {
+	SCORE int
+	WORD  string
 }
 
 type trustData struct {
@@ -84,23 +91,25 @@ const (
 )
 
 var (
-	debug, logging, noTrust, allowOverride  bool
-	trustFile, lockFile, LogDir, replaceStr string
-	openProcess                             []string
-	trusts                                  []trustData
-	noTrusts                                []noTrustData
-	clients                                 []clientsData
-	serverRules                             []serverRuleData
-	clientRules                             []clientRuleData
-	svrTriggers                             []string
-	cliTriggers                             []uint32
-	TimeDecrement                           [2]int
-	myIp                                    string
+	debug, logging, noTrust, allowOverride                             bool
+	trustFile, lockFile, LogDir, replaceStr, serverSecret, ApiPassword string
+	openProcess                                                        []string
+	trusts                                                             []trustData
+	noTrusts                                                           []noTrustData
+	clients                                                            []clientsData
+	serverRules                                                        []serverRuleData
+	clientRules                                                        []clientRuleData
+	svrTriggers                                                        []string
+	cliTriggers                                                        []uint32
+	TimeDecrement                                                      [2]int
+	myIp                                                               string
+	clientDisconnect                                                   int
 )
 
 func main() {
 	_client := flag.Bool("client", false, "[-client=client mode (true is enable)]")
 	_server := flag.String("server", "127.0.0.1:50005", "[-server=connect server (default: 127.0.0.1:50005)]")
+	_secret := flag.String("secret", "goTrust", "[-secret=API allow secret]")
 	_port := flag.String("port", ":50005", "[-port=server port (default: :50005)]")
 	_Debug := flag.Bool("debug", false, "[-debug=debug mode (true is enable)]")
 	_Logging := flag.Bool("log", false, "[-log=logging mode (true is enable)]")
@@ -110,6 +119,7 @@ func main() {
 	_autoRW := flag.Bool("auto", true, "[-auto=config auto read/write mode (true is enable)]")
 	_Lock := flag.String("lock", "lock", "[-lock=lock file name and path]")
 	_allowOverride := flag.Bool("allowOverride", false, "[-allowOverride=trust file override mode (true is enable)]")
+	_clientDisconnect := flag.Int("clientDisconnect", 60, "[-clientDisconnect=client live interval ]")
 
 	flag.Parse()
 
@@ -119,6 +129,8 @@ func main() {
 	trustFile = string(*_Trust)
 	replaceStr = string(*_replaceStr)
 	allowOverride = bool(*_allowOverride)
+	clientDisconnect = int(*_clientDisconnect)
+	serverSecret = string(*_secret)
 
 	if *_client == true {
 		noTrust = false
@@ -156,6 +168,7 @@ func sendServerMsg(stream pb.Logging_LogServer, cmd, str string) {
 
 func clientStart(server string) {
 	recordOpenProcess()
+	//scoresCounts
 
 	conn, err := grpc.Dial(server, grpc.WithInsecure())
 	if err != nil {
@@ -181,6 +194,7 @@ func clientStart(server string) {
 	myIp = ip
 
 	sendClientMsg(stream, reqCmd, myIp+"\t"+uname())
+
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
@@ -211,8 +225,16 @@ func clientStart(server string) {
 		}
 	}
 
+	nowTime := time.Now().Unix()
+
 	go func() {
 		for {
+			now := time.Now()
+			if now.Unix()+int64(clientDisconnect) > nowTime {
+				debugLog("[server missing.. no trust mode!]")
+				noTrust = true
+			}
+
 			resp, err := stream.Recv()
 			if err != nil {
 				log.Fatalf("can not receive %v", err)
@@ -235,6 +257,7 @@ func clientStart(server string) {
 			case trustCmd:
 				if noTrust == true {
 					debugLog("[retrust!]")
+					nowTime = time.Now().Unix()
 				}
 				noTrust = false
 			}
@@ -243,6 +266,9 @@ func clientStart(server string) {
 
 	if len(clientRules) > 0 {
 		setWatch(stream)
+	} else {
+		fmt.Println("rules not found..")
+		os.Exit(1)
 	}
 
 	go func() {
@@ -558,6 +584,12 @@ func serverStart(port, config string, autoRW bool) {
 		}
 	}
 
+	http.HandleFunc("/api", apiHandler)
+	err := http.ListenAndServeTLS(":50006", cert, key, nil)
+	if err != nil {
+		log.Fatal("ListenAndServeTLS: ", err)
+	}
+
 	// create listiner
 	lis, err := net.Listen("tcp", ":50005")
 	if err != nil {
@@ -592,6 +624,44 @@ func serverStart(port, config string, autoRW bool) {
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
+}
+
+func apiHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+	w.Header().Set("Content-Type", "application/json")
+
+	//getScores
+	//resetWatcher
+
+	if debug == true {
+		fmt.Println("put call: ", r.RemoteAddr, r.URL.Path)
+	}
+
+	d := json.NewDecoder(r.Body)
+	p := &apiData{}
+	err := d.Decode(p)
+	if err != nil {
+		w.Write([]byte("internal server error"))
+		return
+	}
+
+	debugLog("api PUT) Label: " + p.Label + " Cred: " + p.Cred + " Expiration: " + p.Expiration + " Salt:" + p.Salt)
+	resp := apiDo(p)
+
+	data := &responseData{response: resp}
+	outputJson, err := json.Marshal(data)
+	if err != nil {
+		w.Write([]byte("internal server error"))
+		return
+	}
+
+	w.Write(outputJson)
+}
+
+func apiDo(apiCall *apiData) {
+
 }
 
 func setWatch(stream pb.Logging_LogClient) {
@@ -744,7 +814,7 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 func loadConfig(trustFile string, tFlag bool) {
 	loadOptions := ini.LoadOptions{}
 	if tFlag == true {
-		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir", "noTrusts"}
+		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir", "noTrusts", "ApiPassword", "dataScore"}
 		trusts = nil
 		serverRules = nil
 		svrTriggers = nil
@@ -766,6 +836,8 @@ func loadConfig(trustFile string, tFlag bool) {
 		setStructs("TimeDecrement", cfg.Section("TimeDecrement").Body(), 4)
 		setStructs("LogDir", cfg.Section("LogDir").Body(), 5)
 		setStructs("noTrusts", cfg.Section("noTrusts").Body(), 6)
+		setStructs("ApiPassword", cfg.Section("ApiPassword").Body(), 7)
+		setStructs("dataScore", cfg.Section("dataScore").Body(), 8)
 	} else {
 		setStructs("Scores", cfg.Section("Scores").Body(), 2)
 	}
@@ -843,6 +915,11 @@ func setStructs(configType, datas string, flag int) {
 					noTrusts = append(noTrusts, noTrustData{FILTER: strs[0], CMD: strs[1]})
 					debugLog(v)
 				}
+			case 7:
+				if len(strs) == 2 {
+					noTrusts = append(noTrusts, dataScores{SCORE: strs[0], WORD: strs[1]})
+					debugLog(v)
+				}
 			}
 		} else if flag == 3 {
 			svrTriggers = append(svrTriggers, v)
@@ -855,6 +932,9 @@ func setStructs(configType, datas string, flag int) {
 					os.Exit(1)
 				}
 			}
+			debugLog(v)
+		} else if flag == 7 {
+			ApiPassword = v
 			debugLog(v)
 		}
 	}
