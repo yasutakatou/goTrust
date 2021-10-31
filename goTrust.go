@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -28,7 +29,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/shirou/gopsutil/process"
-	"github.com/subgraph/inotify"
+
+	//"github.com/subgraph/inotify"
 	"google.golang.org/grpc"
 	"gopkg.in/ini.v1"
 
@@ -43,7 +45,7 @@ type Capturer struct {
 	in            *os.File
 }
 
-type dataScores struct {
+type dataScoresData struct {
 	SCORE int
 	WORD  string
 }
@@ -78,6 +80,16 @@ type clientRuleData struct {
 	NOPATH  string
 }
 
+type responseData struct {
+	response string
+}
+
+type apiData struct {
+	Name     string
+	Data     string
+	Password string
+}
+
 const (
 	reqCmd        = "requestClient"
 	hitCmd        = "hitProcess"
@@ -90,6 +102,11 @@ const (
 	pingCmd       = "hello"
 )
 
+type filterData struct {
+	IP    string
+	Count int
+}
+
 var (
 	debug, logging, noTrust, allowOverride                             bool
 	trustFile, lockFile, LogDir, replaceStr, serverSecret, ApiPassword string
@@ -99,11 +116,15 @@ var (
 	clients                                                            []clientsData
 	serverRules                                                        []serverRuleData
 	clientRules                                                        []clientRuleData
+	dataScores                                                         []dataScoresData
 	svrTriggers                                                        []string
 	cliTriggers                                                        []uint32
 	TimeDecrement                                                      [2]int
 	myIp                                                               string
 	clientDisconnect                                                   int
+	filterCount                                                        int
+	filters                                                            []filterData
+	allows                                                             []string
 )
 
 func main() {
@@ -120,6 +141,7 @@ func main() {
 	_Lock := flag.String("lock", "lock", "[-lock=lock file name and path]")
 	_allowOverride := flag.Bool("allowOverride", false, "[-allowOverride=trust file override mode (true is enable)]")
 	_clientDisconnect := flag.Int("clientDisconnect", 60, "[-clientDisconnect=client live interval ]")
+	_filterCount := flag.Int("filterCount", 3, "[-filterCount=allow connect retrys.]")
 
 	flag.Parse()
 
@@ -131,6 +153,7 @@ func main() {
 	allowOverride = bool(*_allowOverride)
 	clientDisconnect = int(*_clientDisconnect)
 	serverSecret = string(*_secret)
+	filterCount = int(*_filterCount)
 
 	if *_client == true {
 		noTrust = false
@@ -632,11 +655,21 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 	w.Header().Set("Content-Type", "application/json")
 
-	//getScores
-	//resetWatcher
-
 	if debug == true {
 		fmt.Println("put call: ", r.RemoteAddr, r.URL.Path)
+	}
+
+	var data *responseData
+	var outputJson []byte
+
+	if len(allows) > 0 {
+		if checkAllows(r.RemoteAddr) == false {
+			debugLog(r.RemoteAddr + ": not allow!")
+			data = &responseData{response: "error " + r.RemoteAddr + " not allow!"}
+			outputJson, _ = json.Marshal(data)
+			w.Write(outputJson)
+			return
+		}
 	}
 
 	d := json.NewDecoder(r.Body)
@@ -647,11 +680,26 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	debugLog("api PUT) Label: " + p.Label + " Cred: " + p.Cred + " Expiration: " + p.Expiration + " Salt:" + p.Salt)
-	resp := apiDo(p)
+	debugLog("api PUT) Name: " + p.Name + " Data: " + p.Data + " Password: " + p.Password)
 
-	data := &responseData{response: resp}
-	outputJson, err := json.Marshal(data)
+	if p.Password == ApiPassword {
+		resp := apiDo(r.RemoteAddr, p)
+		if resp == "" {
+			addRetrys(r.RemoteAddr)
+		} else {
+			resetRetry(r.RemoteAddr)
+		}
+	} else {
+		if checkRetrys(p.Password, r.RemoteAddr) == false {
+			debugLog(r.RemoteAddr + ": over retrys")
+			data = &responseData{response: "error " + r.RemoteAddr + " : over retrys"}
+		} else {
+			data = &responseData{response: "error " + r.RemoteAddr + " : password invalid"}
+		}
+	}
+
+	data = &responseData{response: resp}
+	outputJson, err = json.Marshal(data)
 	if err != nil {
 		w.Write([]byte("internal server error"))
 		return
@@ -660,8 +708,96 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(outputJson)
 }
 
-func apiDo(apiCall *apiData) {
+func resetRetry(ipp string) {
+	ip := strings.Split(ipp, ":")[0]
+	for x, fil := range filters {
+		if fil.IP == ip {
+			filters[x].Count = 0
+		}
+	}
+}
 
+func addRetrys(ipp string) {
+	ip := strings.Split(ipp, ":")[0]
+	for x, fil := range filters {
+		if fil.IP == ip {
+			filters[x].Count = filters[x].Count + 1
+		}
+	}
+}
+
+func checkRetrys(ipp string) bool {
+	ip := strings.Split(ipp, ":")[0]
+	for x, fil := range filters {
+		if fil.IP == ip {
+			if fil.Count >= filterCount {
+				return false
+			}
+			filters[x].Count = filters[x].Count + 1
+			return true
+		}
+	}
+
+	filters = append(filters, filterData{IP: ip, Count: 1})
+	return true
+}
+
+func checkAllows(ip string) bool {
+	for _, allow := range allows {
+		ipRegex := regexp.MustCompile(allow)
+		if ipRegex.MatchString(ip) == true {
+			return true
+		}
+	}
+	return false
+}
+
+func apiDo(ipp string, apiCall *apiData) string {
+	ip := strings.Split(ipp, ":")[0]
+	switch apiCall.Name {
+	case "score":
+		if len(apiCall.Data) > 2 {
+			switch apiCall.Data[0:1] {
+			case "+":
+				i, err := strconv.Atoi(apiCall.Data[1:])
+				if err != nil {
+					return ""
+				}
+				scoreControl(ip, true, i)
+				exportClients()
+			case "-":
+				i, err := strconv.Atoi(apiCall.Data[1:])
+				if err != nil {
+					return ""
+				}
+				scoreControl(ip, false, i)
+				exportClients()
+			default:
+				return ""
+			}
+		}
+		return ""
+	case "show":
+	default:
+		return ""
+	}
+	return ""
+}
+
+func scoreControl(ip string, plusMinus bool, cnt int) {
+	for x, client := range clients {
+		if client.IP == ip {
+			if plusMinus == true {
+				clients[x].SCORE = clients[x].SCORE + cnt
+			} else {
+				if client.SCORE-cnt < 0 {
+					clients[x].SCORE = 0
+				} else {
+					clients[x].SCORE = clients[x].SCORE - cnt
+				}
+			}
+		}
+	}
 }
 
 func setWatch(stream pb.Logging_LogClient) {
@@ -814,7 +950,7 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 func loadConfig(trustFile string, tFlag bool) {
 	loadOptions := ini.LoadOptions{}
 	if tFlag == true {
-		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir", "noTrusts", "ApiPassword", "dataScore"}
+		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir", "noTrusts", "ApiPassword", "AllowIP", "dataScore"}
 		trusts = nil
 		serverRules = nil
 		svrTriggers = nil
@@ -837,28 +973,54 @@ func loadConfig(trustFile string, tFlag bool) {
 		setStructs("LogDir", cfg.Section("LogDir").Body(), 5)
 		setStructs("noTrusts", cfg.Section("noTrusts").Body(), 6)
 		setStructs("ApiPassword", cfg.Section("ApiPassword").Body(), 7)
-		setStructs("dataScore", cfg.Section("dataScore").Body(), 8)
+		setStructs("AllowIP", cfg.Section("AllowIP").Body(), 8)
+		setStructs("dataScore", cfg.Section("dataScore").Body(), 9)
 	} else {
 		setStructs("Scores", cfg.Section("Scores").Body(), 2)
 	}
 }
 
-func searchPath(filename string) string {
+func searchPath(filename string) (string, bool, []int) {
 	paths := strings.Split(os.Getenv("PATH"), ":")
 	for _, cmd := range paths {
 		if Exists(cmd + "/" + filename) {
 			debugLog("Command Exists! : " + cmd + "/" + filename)
-			return cmd + "/" + filename
+			return cmd + "/" + filename, false, nil
 		}
 	}
 
 	if Exists(filename) {
 		debugLog("File Exists! : " + filename)
-		return filename
+		datas := scanDataScore(filename)
+		return filename, ture, datas
 	}
 
 	debugLog("Not Exists! : " + filename)
-	return ""
+	return "", false, nil
+}
+
+func scanDataScore(filename string) []int {
+	datas := make([]string, len(dataScores))
+
+	var fp *os.File
+	var err error
+
+	fp, err = os.Open(filename)
+	if err != nil {
+		fmt.Println(err)
+		return datas
+	}
+	defer fp.Close()
+
+	scanner := bufio.NewScanner(fp)
+	for scanner.Scan() {
+		readData := scanner.Text()
+		sct := scanStr(readData)
+		if sct > 0 {
+			datas[sct-1] = datas[sct-1] + dataScores[sct-1].SCORE
+		}
+	}
+	return datas
 }
 
 func setStructs(configType, datas string, flag int) {
@@ -920,6 +1082,13 @@ func setStructs(configType, datas string, flag int) {
 					noTrusts = append(noTrusts, dataScores{SCORE: strs[0], WORD: strs[1]})
 					debugLog(v)
 				}
+			case 9:
+				if len(strs) == 2 {
+					if val, err := strconv.Atoi(strs[0]); err == nil {
+						dataScores = append(dataScores, dataScoresData{SCORE: val, WORD: strs[1]})
+						debugLog(v)
+					}
+				}
 			}
 		} else if flag == 3 {
 			svrTriggers = append(svrTriggers, v)
@@ -935,6 +1104,9 @@ func setStructs(configType, datas string, flag int) {
 			debugLog(v)
 		} else if flag == 7 {
 			ApiPassword = v
+			debugLog(v)
+		} else if flag == 8 {
+			allows = append(allows, v)
 			debugLog(v)
 		}
 	}
