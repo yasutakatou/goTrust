@@ -78,7 +78,6 @@ type clientRuleData struct {
 	EXEC    string
 	CMDLINE []string
 	NOPATH  string
-	SCORE   []int
 }
 
 type responseData struct {
@@ -101,6 +100,7 @@ const (
 	exitCmd       = "exitClient"
 	addTriggerCmd = "addTrigger"
 	pingCmd       = "hello"
+	showCmd       = "show"
 )
 
 type filterData struct {
@@ -249,7 +249,8 @@ func clientStart(server string) {
 		default:
 			if stra, datas := searchPath(resp.Cmd); stra != "" {
 				strb := strings.Split(resp.Str, "\t")
-				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd, SCORE: datas})
+				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
+				sendClientMsg(stream, showCmd, intStructToString(datas))
 			}
 		}
 	}
@@ -308,6 +309,14 @@ func clientStart(server string) {
 		close(done)
 	}()
 	//<-done
+}
+
+func intStructToString(str []int) string {
+	result := ""
+	for _, ints := range str {
+		result = result + strconv.Itoa(ints)
+	}
+	return result
 }
 
 type server struct{}
@@ -1034,7 +1043,15 @@ func scanDataScore(filename string) []int {
 	return datas
 }
 
-func scanStr(readStr string)
+func scanStr(readStr string) int {
+	for x, datas := range dataScores {
+		strRegex := regexp.MustCompile(datas.WORD)
+		if strRegex.MatchString(readStr) == true {
+			return x + 1
+		}
+	}
+	return 0
+}
 
 func setStructs(configType, datas string, flag int) {
 	debugLog(" -- " + configType + " --")
