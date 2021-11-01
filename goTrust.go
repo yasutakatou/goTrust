@@ -355,12 +355,22 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 					} else {
 						sendServerMsg(srv, trustCmd, "")
 					}
+				case showCmd:
+					addClientDataScore(ip, req.Str)
 				}
 				continue
 			} else {
 				log.Printf("receive error %v", err)
 				continue
 			}
+		}
+	}
+}
+
+func addClientDataScore(ip, strs string) {
+	for _, client := range clientsDataScore {
+		if ip == clientsDataScore.ip {
+			clientsDataScore = append(clientsDataScore, clientsDataScoreData{target: IP, strs: STRING})
 		}
 	}
 }
@@ -793,6 +803,8 @@ func apiDo(ipp string, apiCall *apiData) string {
 		}
 		return ""
 	case "show":
+		searchClients(ip)
+		clientsDataScore
 	default:
 		return ""
 	}
