@@ -108,6 +108,7 @@ const (
 	addTriggerCmd = "addTrigger"
 	pingCmd       = "hello"
 	showCmd       = "show"
+	authCmd       = "auth"
 )
 
 type filterData struct {
@@ -243,6 +244,8 @@ func clientStart(server string) {
 		}
 
 		switch resp.Cmd {
+		case authCmd:
+			sendClientMsg(stream, authCmd, ApiPassword)
 		case exitCmd:
 			stream.CloseSend()
 			debugLog("add client failed..")
@@ -381,6 +384,10 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 				return nil
 			} else if err == nil {
 				switch req.Cmd {
+				case authCmd:
+					if req.Str != ApiPassword {
+						sendServerMsg(srv, exitCmd, "password invaid")
+					}
 				case reqCmd:
 					if addClient(req.Str) == true {
 						respRules(srv)
@@ -597,6 +604,8 @@ func concatTab(strs []string) string {
 }
 
 func respRules(srv pb.Logging_LogServer) {
+	sendServerMsg(srv, authCmd, "")
+
 	for _, rule := range svrTriggers {
 		sendServerMsg(srv, addTriggerCmd, rule)
 	}
