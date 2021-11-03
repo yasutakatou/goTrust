@@ -46,8 +46,13 @@ type Capturer struct {
 }
 
 type dataScoresData struct {
-	SCORE int
+	SCORE string
 	WORD  string
+}
+
+type clientScoresData struct {
+	IP     string
+	Scores string
 }
 
 type trustData struct {
@@ -118,6 +123,7 @@ var (
 	serverRules                                                        []serverRuleData
 	clientRules                                                        []clientRuleData
 	dataScores                                                         []dataScoresData
+	clientScores                                                       []clientScoresData
 	svrTriggers                                                        []string
 	cliTriggers                                                        []uint32
 	TimeDecrement                                                      [2]int
@@ -197,7 +203,6 @@ func sendServerMsg(stream pb.Logging_LogServer, cmd, str string) {
 
 func clientStart(server string) {
 	recordOpenProcess()
-	//scoresCounts
 
 	conn, err := grpc.Dial(server, grpc.WithInsecure())
 	if err != nil {
@@ -246,14 +251,54 @@ func clientStart(server string) {
 			} else {
 				log.Fatal(err)
 			}
+		case addScoreCmd:
+			strb := strings.Split(resp.Str, "\t")
+			clientScores = append(clientScores, clientScoresData{SCORE: strb[0], WORD: strb[0]})
 		default:
 			if stra, datas := searchPath(resp.Cmd); stra != "" {
 				strb := strings.Split(resp.Str, "\t")
 				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
-				sendClientMsg(stream, showCmd, intStructToString(datas))
+				sendServer(stream, showCmd, intStructToString(datas))
 			}
 		}
 	}
+
+	func sendServer(ip, token, pingData, expiration, saltStr string) {
+		if strings.Index(ip, "https://") == -1 {
+			ip = "https://" + ip + "/put"
+		}
+	
+		request, err := http.NewRequest(
+			"POST",
+			ip,
+			bytes.NewBuffer(JsonToByte(encryptCredData{Label: token, Cred: pingData, Expiration: expiration, Salt: saltStr})),
+		)
+	
+		if err != nil {
+			log.Fatal(err)
+		}
+	
+		request.Header.Set("Content-Type", "application/json")
+	
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		client := &http.Client{
+			Transport: tr,
+		}
+		resp, err := client.Do(request)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+	
+		debugLog(string(body))
+	}
+
 
 	nowTime := time.Now().Unix()
 
@@ -355,8 +400,6 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 					} else {
 						sendServerMsg(srv, trustCmd, "")
 					}
-				case showCmd:
-					addClientDataScore(ip, req.Str)
 				}
 				continue
 			} else {
@@ -370,7 +413,7 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 func addClientDataScore(ip, strs string) {
 	for _, client := range clientsDataScore {
 		if ip == clientsDataScore.ip {
-			clientsDataScore = append(clientsDataScore, clientsDataScoreData{target: IP, strs: STRING})
+			clientsDataScore = append(clientsDataScore, clientsDataScoreData{target: ip, strs: strs})
 		}
 	}
 }
@@ -560,6 +603,11 @@ func respRules(srv pb.Logging_LogServer) {
 	for _, rule := range serverRules {
 		sendServerMsg(srv, rule.EXEC, concatTab(rule.CMDLINE))
 	}
+
+	for _, rule := range dataScores {
+		sendServerMsg(srv, addScoreCmd, rule.SCORE+"\t"+rule.WORD)
+	}
+
 	sendServerMsg(srv, endRuleCmd, "")
 }
 
@@ -802,11 +850,35 @@ func apiDo(ipp string, apiCall *apiData) string {
 			}
 		}
 		return ""
+	case "scoreAdd":
+		if resp := scoreAdd(apiCall.Data); resp != "" {
+			return resp
+		}
 	case "show":
-		searchClients(ip)
-		clientsDataScore
+		if resp := searchClients(apiCall.Data); resp != "" {
+			return resp
+		}
 	default:
 		return ""
+	}
+	return ""
+}
+
+func scoreAdd(datas string) {
+	data := strings.Split(datas, "\t")
+	for x, client := range clientScores {
+		if client.IP == data[0] {
+			clientScores[x].Scores = clientScores[x].Scores + "," + data[1]
+		}
+	}
+
+	clientScores = append(clientScores, clientScores{IP: ip, Scores: data[1]})
+}
+
+func searchClients(ip string) string {
+	strs := 0
+	for _, client := range clientScores {
+		return client.Scores
 	}
 	return ""
 }
@@ -1121,10 +1193,8 @@ func setStructs(configType, datas string, flag int) {
 				}
 			case 9:
 				if len(strs) == 2 {
-					if val, err := strconv.Atoi(strs[0]); err == nil {
-						dataScores = append(dataScores, dataScoresData{SCORE: val, WORD: strs[1]})
-						debugLog(v)
-					}
+					dataScores = append(dataScores, dataScoresData{SCORE: strs[0], WORD: strs[1]})
+					debugLog(v)
 				}
 			}
 		} else if flag == 3 {
