@@ -11,11 +11,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -258,47 +260,10 @@ func clientStart(server string) {
 			if stra, datas := searchPath(resp.Cmd); stra != "" {
 				strb := strings.Split(resp.Str, "\t")
 				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
-				sendServer(stream, showCmd, intStructToString(datas))
+				sendServerHttp(stream, showCmd, intStructToString(datas))
 			}
 		}
 	}
-
-	func sendServer(ip, token, pingData, expiration, saltStr string) {
-		if strings.Index(ip, "https://") == -1 {
-			ip = "https://" + ip + "/put"
-		}
-	
-		request, err := http.NewRequest(
-			"POST",
-			ip,
-			bytes.NewBuffer(JsonToByte(encryptCredData{Label: token, Cred: pingData, Expiration: expiration, Salt: saltStr})),
-		)
-	
-		if err != nil {
-			log.Fatal(err)
-		}
-	
-		request.Header.Set("Content-Type", "application/json")
-	
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		client := &http.Client{
-			Transport: tr,
-		}
-		resp, err := client.Do(request)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Fatal(err)
-		}
-	
-		debugLog(string(body))
-	}
-
 
 	nowTime := time.Now().Unix()
 
@@ -354,6 +319,42 @@ func clientStart(server string) {
 		close(done)
 	}()
 	//<-done
+}
+
+func sendServerHttp(ip, path, data, password string) {
+	if strings.Index(ip, "https://") == -1 {
+		ip = "https://" + ip + "/api"
+	}
+
+	request, err := http.NewRequest(
+		"POST",
+		ip,
+		bytes.NewBuffer(JsonToByte(apiData{Name: path, Data: data, Password: password})),
+	)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{
+		Transport: tr,
+	}
+	resp, err := client.Do(request)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	debugLog(string(body))
 }
 
 func intStructToString(str []int) string {
