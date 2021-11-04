@@ -98,18 +98,24 @@ type apiData struct {
 }
 
 const (
-	reqCmd        = "requestClient"
-	hitCmd        = "hitProcess"
-	endRuleCmd    = "endRules"
-	killCmd       = "killProcess"
-	noTrustCmd    = "noTrust"
-	trustCmd      = "okTrust"
-	exitCmd       = "exitClient"
-	addTriggerCmd = "addTrigger"
-	pingCmd       = "hello"
-	showCmd       = "show"
-	authCmd       = "auth"
+	reqCmd         = "requestClient"
+	hitCmd         = "hitProcess"
+	endRuleCmd     = "endRules"
+	killCmd        = "killProcess"
+	noTrustCmd     = "noTrust"
+	trustCmd       = "okTrust"
+	exitCmd        = "exitClient"
+	addTriggerCmd  = "addTrigger"
+	pingCmd        = "hello"
+	showCmd        = "show"
+	authCmd        = "auth"
+	addScoreCmd    = "addScore"
+	resetClientCmd = "reset"
 )
+
+type requestData struct {
+	Token string `json:"token"`
+}
 
 type filterData struct {
 	IP    string
@@ -136,6 +142,7 @@ var (
 	filters                                                            []filterData
 	allows                                                             []string
 	dataScanCount                                                      int
+	resetClient                                                        chan bool
 )
 
 func main() {
@@ -232,6 +239,76 @@ func clientStart(server string) {
 
 	sendClientMsg(stream, reqCmd, myIp+"\t"+uname())
 
+	initClient(stream)
+
+	nowTime := time.Now().Unix()
+
+	go func() {
+		for {
+			now := time.Now()
+			if now.Unix()+int64(clientDisconnect) > nowTime {
+				debugLog("[server missing.. no trust mode!]")
+				noTrust = true
+			}
+
+			resp, err := stream.Recv()
+			if err != nil {
+				log.Fatalf("can not receive %v", err)
+				os.Exit(1)
+			}
+			if resp.Cmd != trustCmd {
+				debugLog("recv: " + resp.Cmd + " " + resp.Str)
+			}
+
+			switch resp.Cmd {
+			case resetClientCmd:
+				resetClient <- true
+				initClient(stream)
+			case killCmd:
+				killProcessName(resp.Str)
+			case exitCmd:
+				stream.CloseSend()
+				debugLog("add client failed..")
+				os.Exit(1)
+			case noTrustCmd:
+				debugLog("[no trust mode!]")
+				noTrust = true
+			case trustCmd:
+				if noTrust == true {
+					debugLog("[retrust!]")
+					nowTime = time.Now().Unix()
+				}
+				noTrust = false
+			}
+		}
+	}()
+
+	if len(clientRules) > 0 {
+		setWatch(stream)
+	} else {
+		fmt.Println("rules not found..")
+		os.Exit(1)
+	}
+
+	go func() {
+		<-ctx.Done()
+		if err := ctx.Err(); err != nil {
+			log.Println(err)
+		}
+		close(done)
+	}()
+	//<-done
+}
+
+func JsonToByteReq(data requestData) []byte {
+	outputJson, err := json.Marshal(data)
+	if err != nil {
+		return []byte(fmt.Sprintf("%s", err))
+	}
+	return []byte(outputJson)
+}
+
+func initClient(stream pb.Logging_LogClient) {
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
@@ -268,60 +345,6 @@ func clientStart(server string) {
 		}
 	}
 
-	nowTime := time.Now().Unix()
-
-	go func() {
-		for {
-			now := time.Now()
-			if now.Unix()+int64(clientDisconnect) > nowTime {
-				debugLog("[server missing.. no trust mode!]")
-				noTrust = true
-			}
-
-			resp, err := stream.Recv()
-			if err != nil {
-				log.Fatalf("can not receive %v", err)
-				os.Exit(1)
-			}
-			if resp.Cmd != trustCmd {
-				debugLog("recv: " + resp.Cmd + " " + resp.Str)
-			}
-
-			switch resp.Cmd {
-			case killCmd:
-				killProcessName(resp.Str)
-			case exitCmd:
-				stream.CloseSend()
-				debugLog("add client failed..")
-				os.Exit(1)
-			case noTrustCmd:
-				debugLog("[no trust mode!]")
-				noTrust = true
-			case trustCmd:
-				if noTrust == true {
-					debugLog("[retrust!]")
-					nowTime = time.Now().Unix()
-				}
-				noTrust = false
-			}
-		}
-	}()
-
-	if len(clientRules) > 0 {
-		setWatch(stream)
-	} else {
-		fmt.Println("rules not found..")
-		os.Exit(1)
-	}
-
-	go func() {
-		<-ctx.Done()
-		if err := ctx.Err(); err != nil {
-			log.Println(err)
-		}
-		close(done)
-	}()
-	//<-done
 }
 
 func sendServerHttp(ip, path, data, password string) {
@@ -860,6 +883,10 @@ func apiDo(ipp string, apiCall *apiData) string {
 			}
 		}
 		return ""
+	case resetClient:
+		if resp := checkClient(apiCall.Data); resp != "" {
+			return "reset\t" + resp
+		}
 	case "scoreAdd":
 		if resp := scoreAdd(apiCall.Data); resp != "" {
 			return resp
@@ -870,6 +897,15 @@ func apiDo(ipp string, apiCall *apiData) string {
 		}
 	default:
 		return ""
+	}
+	return ""
+}
+
+func checkClient(data string) string {
+	for _, client := range clientScores {
+		if client.IP == data {
+			return data
+		}
 	}
 	return ""
 }
@@ -1034,6 +1070,8 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 	go func() {
 		for {
 			select {
+			case <-resetClient:
+				return
 			case ev := <-watman.Event:
 				if triggerChecker(ev.Mask) {
 					debugLog("hit: " + ev.String())
@@ -1049,6 +1087,10 @@ func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
 
 	go func() {
 		for {
+			select {
+			case <-resetClient:
+				return
+			}
 			sendClientMsg(stream, pingCmd, myIp)
 			time.Sleep(time.Second * time.Duration(1))
 		}
