@@ -26,13 +26,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/shirou/gopsutil/process"
 
-	//"github.com/subgraph/inotify"
 	"google.golang.org/grpc"
 	"gopkg.in/ini.v1"
 
@@ -111,6 +109,7 @@ const (
 	authCmd        = "auth"
 	addScoreCmd    = "addScore"
 	resetClientCmd = "reset"
+	setServerCmd   = "server"
 )
 
 type requestData struct {
@@ -300,7 +299,7 @@ func clientStart(server string) {
 	//<-done
 }
 
-func JsonToByteReq(data requestData) []byte {
+func JsonToByte(data apiData) []byte {
 	outputJson, err := json.Marshal(data)
 	if err != nil {
 		return []byte(fmt.Sprintf("%s", err))
@@ -320,6 +319,8 @@ func initClient(stream pb.Logging_LogClient) {
 			break
 		}
 
+		var server string
+
 		switch resp.Cmd {
 		case authCmd:
 			sendClientMsg(stream, authCmd, ApiPassword)
@@ -335,12 +336,15 @@ func initClient(stream pb.Logging_LogClient) {
 			}
 		case addScoreCmd:
 			strb := strings.Split(resp.Str, "\t")
-			clientScores = append(clientScores, clientScoresData{SCORE: strb[0], WORD: strb[0]})
+			dataScores = append(dataScores, dataScoresData{SCORE: strb[0], WORD: strb[0]})
+		case setServerCmd:
+			server = resp.Str
+			debugLog("Server: " + server)
 		default:
 			if stra, datas := searchPath(resp.Cmd); stra != "" {
 				strb := strings.Split(resp.Str, "\t")
 				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
-				sendServerHttp(stream, showCmd, intStructToString(datas))
+				sendServerHttp(server, resp.Cmd, ApiPassword, intStructToString(datas))
 			}
 		}
 	}
@@ -442,9 +446,9 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 }
 
 func addClientDataScore(ip, strs string) {
-	for _, client := range clientsDataScore {
-		if ip == clientsDataScore.ip {
-			clientsDataScore = append(clientsDataScore, clientsDataScoreData{target: ip, strs: strs})
+	for _, client := range clientScores {
+		if ip == client.IP {
+			clientScores = append(clientScores, clientScoresData{IP: ip, Scores: strs})
 		}
 	}
 }
@@ -475,23 +479,19 @@ func scoreSearch(ip string) bool {
 }
 
 func uname() string {
-	var uname syscall.Utsname
-	if err := syscall.Uname(&uname); err != nil {
-		fmt.Printf("Uname: %v", err)
+	hostname, err := os.Hostname()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
-	return arrayToString(uname.Nodename) + " " + arrayToString(uname.Release) + arrayToString(uname.Sysname) + " " + arrayToString(uname.Version) + " " + arrayToString(uname.Machine) + " " + arrayToString(uname.Domainname)
-}
 
-func arrayToString(x [65]int8) string {
-	var buf [65]byte
-	for i, b := range x {
-		buf[i] = byte(b)
+	_, ip, err := getIFandIP()
+	if err != nil {
+		log.Fatal(err)
+		os.Exit(1)
 	}
-	str := string(buf[:])
-	if i := strings.Index(str, "\x00"); i != -1 {
-		str = str[:i]
-	}
-	return str
+
+	return hostname + ip
 }
 
 func addClient(ip string) bool {
@@ -628,6 +628,13 @@ func concatTab(strs []string) string {
 
 func respRules(srv pb.Logging_LogServer) {
 	sendServerMsg(srv, authCmd, "")
+
+	_, ip, err := getIFandIP()
+	if err != nil {
+		log.Fatal(err)
+		os.Exit(1)
+	}
+	sendServerMsg(srv, setServerCmd, ip)
 
 	for _, rule := range svrTriggers {
 		sendServerMsg(srv, addTriggerCmd, rule)
@@ -861,6 +868,10 @@ func checkAllows(ip string) bool {
 func apiDo(ipp string, apiCall *apiData) string {
 	ip := strings.Split(ipp, ":")[0]
 	switch apiCall.Name {
+	case "scoreCtl":
+		//if resp := scoreCalc(apiCall.Data); resp != "" {
+		//	return resp
+		//}
 	case "score":
 		if len(apiCall.Data) > 2 {
 			switch apiCall.Data[0:1] {
@@ -883,13 +894,9 @@ func apiDo(ipp string, apiCall *apiData) string {
 			}
 		}
 		return ""
-	case resetClient:
+	case "resetClient":
 		if resp := checkClient(apiCall.Data); resp != "" {
 			return "reset\t" + resp
-		}
-	case "scoreAdd":
-		if resp := scoreAdd(apiCall.Data); resp != "" {
-			return resp
 		}
 	case "show":
 		if resp := searchClients(apiCall.Data); resp != "" {
@@ -910,7 +917,7 @@ func checkClient(data string) string {
 	return ""
 }
 
-func scoreAdd(datas string) {
+func scoreCalc(datas string) {
 	data := strings.Split(datas, "\t")
 	for x, client := range clientScores {
 		if client.IP == data[0] {
@@ -918,11 +925,10 @@ func scoreAdd(datas string) {
 		}
 	}
 
-	clientScores = append(clientScores, clientScores{IP: ip, Scores: data[1]})
+	clientScores = append(clientScores, clientScoresData{IP: data[0], Scores: data[1]})
 }
 
 func searchClients(ip string) string {
-	strs := 0
 	for _, client := range clientScores {
 		return client.Scores
 	}
@@ -948,17 +954,17 @@ func scoreControl(ip string, plusMinus bool, cnt int) {
 func setWatch(stream pb.Logging_LogClient) {
 	var err error
 
-	watman := make([]*inotify.Watcher, len(clientRules))
+	watman := make([]*fsnotify.Watcher, len(clientRules))
 
 	for x, rule := range clientRules {
-		watman[x], err = inotify.NewWatcher()
+		watman[x], err = fsnotify.NewWatcher()
 		if err != nil {
 			log.Fatal(err)
 			os.Exit(1)
 		}
 
 		debugLog("watch: " + rule.EXEC)
-		err = watman[x].Watch(rule.EXEC)
+		err = watman[x].Add(rule.EXEC)
 		if err != nil {
 			log.Fatal(err)
 			os.Exit(1)
@@ -1066,20 +1072,20 @@ func triggerChecker(ev uint32) bool {
 	return false
 }
 
-func goRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient) {
+func goRouteWatchStart(watman *fsnotify.Watcher, stream pb.Logging_LogClient) {
 	go func() {
 		for {
 			select {
 			case <-resetClient:
 				return
-			case ev := <-watman.Event:
-				if triggerChecker(ev.Mask) {
+			case ev := <-watman.Events:
+				if triggerChecker(uint32(ev.Op)) {
 					debugLog("hit: " + ev.String())
 					if strs := ruleSearch(ev.String()); len(strs) > 0 {
 						sendClientMsg(stream, hitCmd, myIp+"\t"+strs)
 					}
 				}
-			case err := <-watman.Error:
+			case err := <-watman.Errors:
 				log.Println("error:", err)
 			}
 		}
@@ -1172,7 +1178,9 @@ func scanDataScore(filename string) []int {
 		readData := scanner.Text()
 		sct := scanStr(readData)
 		if sct > 0 {
-			datas[sct-1] = datas[sct-1] + dataScores[sct-1].SCORE
+			if val, err := strconv.Atoi(dataScores[sct-1].SCORE); err == nil {
+				datas[sct-1] = datas[sct-1] + val
+			}
 		}
 		count = count + 1
 	}
