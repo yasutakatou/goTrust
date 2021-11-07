@@ -869,9 +869,8 @@ func apiDo(ipp string, apiCall *apiData) string {
 	ip := strings.Split(ipp, ":")[0]
 	switch apiCall.Name {
 	case "scoreCtl":
-		//if resp := scoreCalc(apiCall.Data); resp != "" {
-		//	return resp
-		//}
+		scoreAdd(apiCall.Data)
+		return "add " + apiCall.Data
 	case "score":
 		if len(apiCall.Data) > 2 {
 			switch apiCall.Data[0:1] {
@@ -917,7 +916,7 @@ func checkClient(data string) string {
 	return ""
 }
 
-func scoreCalc(datas string) {
+func scoreAdd(datas string) {
 	data := strings.Split(datas, "\t")
 	for x, client := range clientScores {
 		if client.IP == data[0] {
