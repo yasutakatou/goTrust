@@ -136,7 +136,6 @@ var (
 	cliTriggers                                                        []uint32
 	TimeDecrement                                                      [2]int
 	myIp                                                               string
-	clientDisconnect                                                   int
 	filterCount                                                        int
 	filters                                                            []filterData
 	allows                                                             []string
@@ -148,7 +147,8 @@ func main() {
 	_client := flag.Bool("client", false, "[-client=client mode (true is enable)]")
 	_server := flag.String("server", "127.0.0.1:50005", "[-server=connect server (default: 127.0.0.1:50005)]")
 	_secret := flag.String("secret", "goTrust", "[-secret=API allow secret]")
-	_port := flag.String("port", ":50005", "[-port=server port (default: :50005)]")
+	_grpc := flag.String("grpc", ":50005", "[-grpc=grpc port (default: :50005)]")
+	_api := flag.String("api", ":50006", "[-api=api port (default: :50006)]")
 	_Debug := flag.Bool("debug", false, "[-debug=debug mode (true is enable)]")
 	_Logging := flag.Bool("log", false, "[-log=logging mode (true is enable)]")
 	_Rule := flag.String("rule", "rules.ini", "[-rule=rules config file]")
@@ -157,11 +157,11 @@ func main() {
 	_autoRW := flag.Bool("auto", true, "[-auto=config auto read/write mode (true is enable)]")
 	_Lock := flag.String("lock", "lock", "[-lock=lock file name and path]")
 	_allowOverride := flag.Bool("allowOverride", false, "[-allowOverride=trust file override mode (true is enable)]")
-	_clientDisconnect := flag.Int("clientDisconnect", 60, "[-clientDisconnect=client live interval ]")
 	_filterCount := flag.Int("filterCount", 3, "[-filterCount=allow connect retrys.]")
 	_dataScanCount := flag.Int("dataScanCount", 1000, "[-dataScanCount=data score count lines.]")
 	_cert := flag.String("cert", "localhost.pem", "[-cert=ssl_certificate file path]")
 	_key := flag.String("key", "localhost-key.pem", "[-key=ssl_certificate_key file path]")
+	_ApiPassword := flag.String("ApiPassword", "goTrust", "[-secret=api password]")
 
 	flag.Parse()
 
@@ -171,17 +171,17 @@ func main() {
 	trustFile = string(*_Trust)
 	replaceStr = string(*_replaceStr)
 	allowOverride = bool(*_allowOverride)
-	clientDisconnect = int(*_clientDisconnect)
 	dataScanCount = int(*_dataScanCount)
 	serverSecret = string(*_secret)
 	filterCount = int(*_filterCount)
+	ApiPassword = string(*_ApiPassword)
 
 	if *_client == true {
 		noTrust = false
-		clientStart(*_server)
+		clientStart(*_server, *_api)
 	} else {
 		os.Remove(lockFile)
-		serverStart(*_port, *_Rule, *_autoRW, *_cert, *_key)
+		serverStart(*_grpc, *_Rule, *_autoRW, *_cert, *_key, *_api)
 	}
 
 	for {
@@ -195,9 +195,10 @@ func main() {
 }
 
 func sendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
+	debugLog("sendClientMsg Command: " + cmd + " String: " + str)
 	req := pb.Request{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
-		log.Fatalf("can not send %v", err)
+		log.Fatalf("client missing! can not send %v", err)
 		os.Exit(1)
 	}
 }
@@ -205,12 +206,12 @@ func sendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
 func sendServerMsg(stream pb.Logging_LogServer, cmd, str string) {
 	req := pb.Response{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
-		log.Fatalf("can not send %v", err)
+		log.Fatalf("server missing! can not send %v", err)
 		os.Exit(1)
 	}
 }
 
-func clientStart(server string) {
+func clientStart(server, api string) {
 	recordOpenProcess()
 
 	conn, err := grpc.Dial(server, grpc.WithInsecure())
@@ -238,18 +239,10 @@ func clientStart(server string) {
 
 	sendClientMsg(stream, reqCmd, myIp+"\t"+uname())
 
-	initClient(stream)
-
-	nowTime := time.Now().Unix()
+	initClient(stream, api)
 
 	go func() {
 		for {
-			now := time.Now()
-			if now.Unix()+int64(clientDisconnect) > nowTime {
-				debugLog("[server missing.. no trust mode!]")
-				noTrust = true
-			}
-
 			resp, err := stream.Recv()
 			if err != nil {
 				log.Fatalf("can not receive %v", err)
@@ -262,7 +255,7 @@ func clientStart(server string) {
 			switch resp.Cmd {
 			case resetClientCmd:
 				resetClient <- true
-				initClient(stream)
+				initClient(stream, api)
 			case killCmd:
 				killProcessName(resp.Str)
 			case exitCmd:
@@ -275,7 +268,6 @@ func clientStart(server string) {
 			case trustCmd:
 				if noTrust == true {
 					debugLog("[retrust!]")
-					nowTime = time.Now().Unix()
 				}
 				noTrust = false
 			}
@@ -307,7 +299,9 @@ func JsonToByte(data apiData) []byte {
 	return []byte(outputJson)
 }
 
-func initClient(stream pb.Logging_LogClient) {
+func initClient(stream pb.Logging_LogClient, api string) {
+	var server string
+
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
@@ -319,7 +313,7 @@ func initClient(stream pb.Logging_LogClient) {
 			break
 		}
 
-		var server string
+		debugLog("resp Command: " + resp.Cmd + " String: " + resp.Str)
 
 		switch resp.Cmd {
 		case authCmd:
@@ -344,7 +338,7 @@ func initClient(stream pb.Logging_LogClient) {
 			if stra, datas := searchPath(resp.Cmd); stra != "" {
 				strb := strings.Split(resp.Str, "\t")
 				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
-				sendServerHttp(server, resp.Cmd, ApiPassword, intStructToString(datas))
+				sendServerHttp(server+api, resp.Cmd, intStructToString(datas), ApiPassword)
 			}
 		}
 	}
@@ -352,6 +346,8 @@ func initClient(stream pb.Logging_LogClient) {
 }
 
 func sendServerHttp(ip, path, data, password string) {
+	debugLog("send: " + ip + " data: " + data + " password:" + password)
+
 	if strings.Index(ip, "https://") == -1 {
 		ip = "https://" + ip + "/api"
 	}
@@ -634,6 +630,7 @@ func respRules(srv pb.Logging_LogServer) {
 		log.Fatal(err)
 		os.Exit(1)
 	}
+
 	sendServerMsg(srv, setServerCmd, ip)
 
 	for _, rule := range svrTriggers {
@@ -651,7 +648,7 @@ func respRules(srv pb.Logging_LogServer) {
 	sendServerMsg(srv, endRuleCmd, "")
 }
 
-func serverStart(port, config string, autoRW bool, cert, key string) {
+func serverStart(port, config string, autoRW bool, cert, key, api string) {
 	if Exists(config) == true {
 		loadConfig(config, true)
 	} else {
@@ -720,16 +717,20 @@ func serverStart(port, config string, autoRW bool, cert, key string) {
 		}
 	}
 
-	http.HandleFunc("/api", apiHandler)
-	err := http.ListenAndServeTLS(":50006", cert, key, nil)
-	if err != nil {
-		log.Fatal("ListenAndServeTLS: ", err)
-	}
+	go func() {
+		http.HandleFunc("/api", apiHandler)
+		err := http.ListenAndServeTLS(api, cert, key, nil)
+		if err != nil {
+			log.Fatal("ListenAndServeTLS: ", err)
+			os.Exit(1)
+		}
+	}()
 
 	// create listiner
 	lis, err := net.Listen("tcp", ":50005")
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
+		os.Exit(1)
 	}
 
 	// create grpc server
@@ -1128,9 +1129,8 @@ func loadConfig(trustFile string, tFlag bool) {
 		setStructs("TimeDecrement", cfg.Section("TimeDecrement").Body(), 4)
 		setStructs("LogDir", cfg.Section("LogDir").Body(), 5)
 		setStructs("noTrusts", cfg.Section("noTrusts").Body(), 6)
-		setStructs("ApiPassword", cfg.Section("ApiPassword").Body(), 7)
-		setStructs("AllowIP", cfg.Section("AllowIP").Body(), 8)
-		setStructs("dataScore", cfg.Section("dataScore").Body(), 9)
+		setStructs("AllowIP", cfg.Section("AllowIP").Body(), 7)
+		setStructs("dataScore", cfg.Section("dataScore").Body(), 8)
 	} else {
 		setStructs("Scores", cfg.Section("Scores").Body(), 2)
 	}
@@ -1250,7 +1250,7 @@ func setStructs(configType, datas string, flag int) {
 					noTrusts = append(noTrusts, noTrustData{FILTER: strs[0], CMD: strs[1]})
 					debugLog(v)
 				}
-			case 9:
+			case 8:
 				if len(strs) == 2 {
 					dataScores = append(dataScores, dataScoresData{SCORE: strs[0], WORD: strs[1]})
 					debugLog(v)
@@ -1269,9 +1269,6 @@ func setStructs(configType, datas string, flag int) {
 			}
 			debugLog(v)
 		} else if flag == 7 {
-			ApiPassword = v
-			debugLog(v)
-		} else if flag == 8 {
 			allows = append(allows, v)
 			debugLog(v)
 		}
