@@ -136,11 +136,13 @@ var (
 	cliTriggers                                                        []uint32
 	TimeDecrement                                                      [2]int
 	myIp                                                               string
+	clientDisconnect                                                   int
 	filterCount                                                        int
 	filters                                                            []filterData
 	allows                                                             []string
 	dataScanCount                                                      int
 	resetClient                                                        chan bool
+	nowTime                                                            int64
 )
 
 func main() {
@@ -157,6 +159,7 @@ func main() {
 	_autoRW := flag.Bool("auto", true, "[-auto=config auto read/write mode (true is enable)]")
 	_Lock := flag.String("lock", "lock", "[-lock=lock file name and path]")
 	_allowOverride := flag.Bool("allowOverride", false, "[-allowOverride=trust file override mode (true is enable)]")
+	_clientDisconnect := flag.Int("clientDisconnect", 60, "[-clientDisconnect=client live interval ]")
 	_filterCount := flag.Int("filterCount", 3, "[-filterCount=allow connect retrys.]")
 	_dataScanCount := flag.Int("dataScanCount", 1000, "[-dataScanCount=data score count lines.]")
 	_cert := flag.String("cert", "localhost.pem", "[-cert=ssl_certificate file path]")
@@ -171,6 +174,7 @@ func main() {
 	trustFile = string(*_Trust)
 	replaceStr = string(*_replaceStr)
 	allowOverride = bool(*_allowOverride)
+	clientDisconnect = int(*_clientDisconnect)
 	dataScanCount = int(*_dataScanCount)
 	serverSecret = string(*_secret)
 	filterCount = int(*_filterCount)
@@ -199,7 +203,7 @@ func sendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
 	req := pb.Request{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
 		log.Fatalf("client missing! can not send %v", err)
-		os.Exit(1)
+		//os.Exit(1)
 	}
 }
 
@@ -207,7 +211,9 @@ func sendServerMsg(stream pb.Logging_LogServer, cmd, str string) {
 	req := pb.Response{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
 		log.Fatalf("server missing! can not send %v", err)
-		os.Exit(1)
+		//os.Exit(1)
+	} else {
+		nowTime = time.Now().Unix()
 	}
 }
 
@@ -241,35 +247,67 @@ func clientStart(server, api string) {
 
 	initClient(stream, api)
 
+	nowTime = time.Now().Unix()
+	retryFlag := false
+
 	go func() {
 		for {
-			resp, err := stream.Recv()
-			if err != nil {
-				log.Fatalf("can not receive %v", err)
-				os.Exit(1)
-			}
-			if resp.Cmd != trustCmd {
-				debugLog("recv: " + resp.Cmd + " " + resp.Str)
+			now := time.Now()
+			if now.Unix() > nowTime+int64(clientDisconnect) {
+				debugLog("[server missing.. no trust mode!]")
+				noTrust = true
+				time.Sleep(time.Second * time.Duration(3))
 			}
 
-			switch resp.Cmd {
-			case resetClientCmd:
-				resetClient <- true
-				initClient(stream, api)
-			case killCmd:
-				killProcessName(resp.Str)
-			case exitCmd:
-				stream.CloseSend()
-				debugLog("add client failed..")
-				os.Exit(1)
-			case noTrustCmd:
-				debugLog("[no trust mode!]")
-				noTrust = true
-			case trustCmd:
-				if noTrust == true {
-					debugLog("[retrust!]")
+			if now.Unix() > nowTime+int64(5) {
+				debugLog("[retry connect!]")
+				conn, err = grpc.Dial(server, grpc.WithInsecure())
+				if err != nil {
+					debugLog("can not connect with server: " + server)
+				} else {
+					client = pb.NewLoggingClient(conn)
+					stream, err = client.Log(context.Background())
+					if err != nil {
+						debugLog("open stream error")
+					} else {
+						debugLog("[retry success!]")
+						ctx = stream.Context()
+						retryFlag = false
+					}
 				}
-				noTrust = false
+				time.Sleep(time.Second * time.Duration(3))
+			}
+
+			if retryFlag == false {
+				resp, err := stream.Recv()
+				if err != nil {
+					retryFlag = true
+				} else {
+					if resp.Cmd != trustCmd {
+						debugLog("recv: " + resp.Cmd + " " + resp.Str)
+					}
+
+					switch resp.Cmd {
+					case resetClientCmd:
+						resetClient <- true
+						initClient(stream, api)
+					case killCmd:
+						killProcessName(resp.Str)
+					case exitCmd:
+						stream.CloseSend()
+						debugLog("add client failed..")
+						os.Exit(1)
+					case noTrustCmd:
+						debugLog("[no trust mode!]")
+						noTrust = true
+					case trustCmd:
+						if noTrust == true {
+							debugLog("[retrust!]")
+							nowTime = time.Now().Unix()
+						}
+						noTrust = false
+					}
+				}
 			}
 		}
 	}()
