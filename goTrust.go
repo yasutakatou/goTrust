@@ -86,7 +86,8 @@ type clientRuleData struct {
 }
 
 type responseData struct {
-	response string
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 type apiData struct {
@@ -110,6 +111,8 @@ const (
 	addScoreCmd    = "addScore"
 	resetClientCmd = "reset"
 	setServerCmd   = "server"
+	scoreAddCmd    = "scoreAdd"
+	scoreCtlCmd    = "scoreCtl"
 )
 
 type requestData struct {
@@ -122,7 +125,7 @@ type filterData struct {
 }
 
 var (
-	debug, logging, noTrust, allowOverride                             bool
+	debug, logging, noTrust, allowOverride, resetFlag                  bool
 	trustFile, lockFile, LogDir, replaceStr, serverSecret, ApiPassword string
 	openProcess                                                        []string
 	trusts                                                             []trustData
@@ -180,6 +183,8 @@ func main() {
 	filterCount = int(*_filterCount)
 	ApiPassword = string(*_ApiPassword)
 
+	resetFlag = false
+
 	if *_client == true {
 		noTrust = false
 		clientStart(*_server, *_api)
@@ -199,7 +204,7 @@ func main() {
 }
 
 func sendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
-	debugLog("sendClientMsg Command: " + cmd + " String: " + str)
+	//debugLog("sendClientMsg Command: " + cmd + " String: " + str)
 	req := pb.Request{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
 		log.Fatalf("client missing! can not send %v", err)
@@ -283,13 +288,15 @@ func clientStart(server, api string) {
 				if err != nil {
 					retryFlag = true
 				} else {
-					if resp.Cmd != trustCmd {
+					if resp.Cmd != trustCmd && resetFlag == false {
 						debugLog("recv: " + resp.Cmd + " " + resp.Str)
 					}
 
 					switch resp.Cmd {
 					case resetClientCmd:
-						resetClient <- true
+						resetFlag = true
+						debugLog("client reseting..")
+						time.Sleep(time.Second * time.Duration(3))
 						initClient(stream, api)
 					case killCmd:
 						killProcessName(resp.Str)
@@ -379,7 +386,10 @@ func initClient(stream pb.Logging_LogClient, api string) {
 				if cnt == 2 {
 
 					debugLog("data source: " + stra + " score: " + intStructToString(datas))
-					sendServerHttp(server+api, "scoreCtl", intStructToString(datas), ApiPassword)
+					_, ip, err := getIFandIP()
+					if err == nil {
+						sendServerHttp(server+api, scoreAddCmd, ip+"\t"+intStructToString(datas), ApiPassword)
+					}
 				}
 			}
 		}
@@ -454,6 +464,12 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 				log.Println("exit")
 				return nil
 			} else if err == nil {
+				if resetFlag == true {
+					sendServerMsg(srv, resetClientCmd, "")
+					fmt.Println("send reset")
+					resetFlag = false
+				}
+
 				switch req.Cmd {
 				case authCmd:
 					if req.Str != ApiPassword {
@@ -471,6 +487,7 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 						sendServerMsg(srv, killCmd, strings.Split(req.Str, "\t")[1])
 					}
 				case pingCmd:
+					//debugLog("server pong!")
 					if scoreSearch(req.Str) == false {
 						sendServerMsg(srv, noTrustCmd, "")
 						if trustSwitch(req.Str) == true {
@@ -827,7 +844,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	if len(allows) > 0 {
 		if checkAllows(r.RemoteAddr) == false {
 			debugLog(r.RemoteAddr + ": not allow!")
-			data = &responseData{response: "error " + r.RemoteAddr + " not allow!"}
+			data = &responseData{Status: "Error", Message: r.RemoteAddr + " not allow!"}
 			outputJson, _ = json.Marshal(data)
 			w.Write(outputJson)
 			return
@@ -838,26 +855,29 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	p := &apiData{}
 	err := d.Decode(p)
 	if err != nil {
-		w.Write([]byte("internal server error"))
+		data = &responseData{Status: "Error", Message: "internal server error"}
+		outputJson, _ = json.Marshal(data)
+		w.Write(outputJson)
 		return
 	}
 
 	debugLog("api PUT) Name: " + p.Name + " Data: " + p.Data + " Password: " + p.Password)
 
-	if p.Password == ApiPassword {
+	if p.Password == ApiPassword && checkRetrys(r.RemoteAddr) == true {
 		resp := apiDo(r.RemoteAddr, p)
 		if resp == "" {
+			data = &responseData{Status: "Error", Message: "invalid api call"}
 			addRetrys(r.RemoteAddr)
 		} else {
+			data = &responseData{Status: "Success", Message: resp}
 			resetRetry(r.RemoteAddr)
 		}
-		data = &responseData{response: resp}
 	} else {
 		if checkRetrys(r.RemoteAddr) == false {
 			debugLog(r.RemoteAddr + ": over retrys")
-			data = &responseData{response: "error " + r.RemoteAddr + " : over retrys"}
+			data = &responseData{Status: "Error", Message: r.RemoteAddr + " : over retrys"}
 		} else {
-			data = &responseData{response: "error " + r.RemoteAddr + " : password invalid"}
+			data = &responseData{Status: "Error", Message: r.RemoteAddr + " : password invalid"}
 		}
 	}
 
@@ -917,10 +937,10 @@ func checkAllows(ip string) bool {
 func apiDo(ipp string, apiCall *apiData) string {
 	ip := strings.Split(ipp, ":")[0]
 	switch apiCall.Name {
-	case "scoreCtl":
+	case scoreAddCmd:
 		scoreAdd(apiCall.Data)
 		return "add " + apiCall.Data
-	case "score":
+	case scoreCtlCmd:
 		if len(apiCall.Data) > 2 {
 			switch apiCall.Data[0:1] {
 			case "+":
@@ -942,11 +962,12 @@ func apiDo(ipp string, apiCall *apiData) string {
 			}
 		}
 		return ""
-	case "resetClient":
+	case resetClientCmd:
 		if resp := checkClient(apiCall.Data); resp != "" {
+			resetFlag = true
 			return "reset\t" + resp
 		}
-	case "show":
+	case showCmd:
 		debugLog("target: " + apiCall.Data)
 		if resp := searchClients(apiCall.Data); resp != "" {
 			return resp
@@ -979,8 +1000,10 @@ func scoreAdd(datas string) {
 
 func searchClients(ip string) string {
 	for _, client := range clientScores {
-		debugLog("IP: " + client.IP + " SCORE: " + client.Scores)
-		return client.Scores
+		//debugLog("IP: " + client.IP + " SCORE: " + client.Scores)
+		if ip == client.IP {
+			return client.Scores
+		}
 	}
 	return ""
 }
@@ -1125,9 +1148,12 @@ func triggerChecker(ev uint32) bool {
 func goRouteWatchStart(watman *fsnotify.Watcher, stream pb.Logging_LogClient) {
 	go func() {
 		for {
-			select {
-			case <-resetClient:
+			if resetFlag == true {
+				resetFlag = false
 				return
+			}
+
+			select {
 			case ev := <-watman.Events:
 				if triggerChecker(uint32(ev.Op)) {
 					debugLog("hit: " + ev.String())
@@ -1143,10 +1169,11 @@ func goRouteWatchStart(watman *fsnotify.Watcher, stream pb.Logging_LogClient) {
 
 	go func() {
 		for {
-			select {
-			case <-resetClient:
+			if resetFlag == true {
+				resetFlag = false
 				return
 			}
+			//debugLog("ping: " + myIp)
 			sendClientMsg(stream, pingCmd, myIp)
 			time.Sleep(time.Second * time.Duration(1))
 		}
