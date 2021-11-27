@@ -90,9 +90,9 @@ type responseData struct {
 }
 
 type apiData struct {
-	Name     string
-	Data     string
-	Password string
+	Name     string `json:"name"`
+	Data     string `json:"data"`
+	Password string `json:"password"`
 }
 
 const (
@@ -368,15 +368,19 @@ func initClient(stream pb.Logging_LogClient, api string) {
 			}
 		case addScoreCmd:
 			strb := strings.Split(resp.Str, "\t")
-			dataScores = append(dataScores, dataScoresData{SCORE: strb[0], WORD: strb[0]})
+			dataScores = append(dataScores, dataScoresData{SCORE: strb[0], WORD: strb[1]})
 		case setServerCmd:
 			server = resp.Str
 			debugLog("Server: " + server)
 		default:
-			if stra, datas := searchPath(resp.Cmd); stra != "" {
+			if cnt, stra, datas := searchPath(resp.Cmd); cnt != 0 {
 				strb := strings.Split(resp.Str, "\t")
 				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
-				sendServerHttp(server+api, resp.Cmd, intStructToString(datas), ApiPassword)
+				if cnt == 2 {
+
+					debugLog("data source: " + stra + " score: " + intStructToString(datas))
+					sendServerHttp(server+api, "scoreCtl", intStructToString(datas), ApiPassword)
+				}
 			}
 		}
 	}
@@ -424,7 +428,13 @@ func sendServerHttp(ip, path, data, password string) {
 func intStructToString(str []int) string {
 	result := ""
 	for _, ints := range str {
-		result = result + strconv.Itoa(ints)
+		cnt := strconv.Itoa(ints)
+		if cnt == "" {
+			result = result + "0,"
+
+		} else {
+			result = result + cnt + ","
+		}
 	}
 	return result
 }
@@ -675,12 +685,12 @@ func respRules(srv pb.Logging_LogServer) {
 		sendServerMsg(srv, addTriggerCmd, rule)
 	}
 
-	for _, rule := range serverRules {
-		sendServerMsg(srv, rule.EXEC, concatTab(rule.CMDLINE))
-	}
-
 	for _, rule := range dataScores {
 		sendServerMsg(srv, addScoreCmd, rule.SCORE+"\t"+rule.WORD)
+	}
+
+	for _, rule := range serverRules {
+		sendServerMsg(srv, rule.EXEC, concatTab(rule.CMDLINE))
 	}
 
 	sendServerMsg(srv, endRuleCmd, "")
@@ -937,6 +947,7 @@ func apiDo(ipp string, apiCall *apiData) string {
 			return "reset\t" + resp
 		}
 	case "show":
+		debugLog("target: " + apiCall.Data)
 		if resp := searchClients(apiCall.Data); resp != "" {
 			return resp
 		}
@@ -968,6 +979,7 @@ func scoreAdd(datas string) {
 
 func searchClients(ip string) string {
 	for _, client := range clientScores {
+		debugLog("IP: " + client.IP + " SCORE: " + client.Scores)
 		return client.Scores
 	}
 	return ""
@@ -1174,23 +1186,23 @@ func loadConfig(trustFile string, tFlag bool) {
 	}
 }
 
-func searchPath(filename string) (string, []int) {
+func searchPath(filename string) (int, string, []int) {
 	paths := strings.Split(os.Getenv("PATH"), ":")
 	for _, cmd := range paths {
 		if Exists(cmd + "/" + filename) {
 			debugLog("Command Exists! : " + cmd + "/" + filename)
-			return cmd + "/" + filename, nil
+			return 1, cmd + "/" + filename, nil
 		}
 	}
 
 	if Exists(filename) {
 		debugLog("File Exists! : " + filename)
 		datas := scanDataScore(filename)
-		return filename, datas
+		return 2, filename, datas
 	}
 
 	debugLog("Not Exists! : " + filename)
-	return "", nil
+	return 0, "", nil
 }
 
 func scanDataScore(filename string) []int {
