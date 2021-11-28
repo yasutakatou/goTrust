@@ -34,6 +34,7 @@ import (
 	"google.golang.org/grpc"
 	"gopkg.in/ini.v1"
 
+	"yasutakatou/goTrust/fwatcher"
 	pb "yasutakatou/goTrust/proto"
 )
 
@@ -77,12 +78,6 @@ type serverRuleData struct {
 	ACT     string
 	EXEC    string
 	CMDLINE []string
-}
-
-type clientRuleData struct {
-	EXEC    string
-	CMDLINE []string
-	NOPATH  string
 }
 
 type responseData struct {
@@ -132,7 +127,7 @@ var (
 	noTrusts                                                           []noTrustData
 	clients                                                            []clientsData
 	serverRules                                                        []serverRuleData
-	clientRules                                                        []clientRuleData
+	clientRules                                                        []fwatcher.ClientRuleData
 	dataScores                                                         []dataScoresData
 	clientScores                                                       []clientScoresData
 	svrTriggers                                                        []string
@@ -156,9 +151,9 @@ func main() {
 	_api := flag.String("api", ":50006", "[-api=api port (default: :50006)]")
 	_Debug := flag.Bool("debug", false, "[-debug=debug mode (true is enable)]")
 	_Logging := flag.Bool("log", false, "[-log=logging mode (true is enable)]")
-	_Rule := flag.String("rule", "rules.ini", "[-rule=rules config file]")
+	_Rule := flag.String("rule", "./rules.ini", "[-rule=rules config file]")
 	_replaceStr := flag.String("replaceString", "{}", "[-replaceString= when no trust action, give ip paramater]")
-	_Trust := flag.String("trust", "trust.ini", "[-trust=trusts config file)]")
+	_Trust := flag.String("trust", "./trust.ini", "[-trust=trusts config file)]")
 	_autoRW := flag.Bool("auto", true, "[-auto=config auto read/write mode (true is enable)]")
 	_Lock := flag.String("lock", "lock", "[-lock=lock file name and path]")
 	_allowOverride := flag.Bool("allowOverride", false, "[-allowOverride=trust file override mode (true is enable)]")
@@ -204,7 +199,7 @@ func main() {
 }
 
 func sendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
-	//debugLog("sendClientMsg Command: " + cmd + " String: " + str)
+	//fwatcher.DebugLog("sendClientMsg Command: " + cmd + " String: " + str)
 	req := pb.Request{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
 		log.Fatalf("client missing! can not send %v", err)
@@ -258,29 +253,29 @@ func clientStart(server, api string) {
 	go func() {
 		for {
 			now := time.Now()
-			if now.Unix() > nowTime+int64(clientDisconnect) {
-				debugLog("[server missing.. no trust mode!]")
+			if now.Unix() > nowTime+int64(clientDisconnect) && retryFlag == true {
+				fwatcher.DebugLog("[server missing.. no trust mode!]", logging, debug)
 				noTrust = true
 				time.Sleep(time.Second * time.Duration(3))
 			}
 
-			if now.Unix() > nowTime+int64(5) {
-				debugLog("[retry connect!]")
+			if now.Unix() > nowTime+int64(5) && retryFlag == true {
+				fwatcher.DebugLog("[retry connect!]", logging, debug)
+				time.Sleep(time.Second * time.Duration(3))
 				conn, err = grpc.Dial(server, grpc.WithInsecure())
 				if err != nil {
-					debugLog("can not connect with server: " + server)
+					fwatcher.DebugLog("can not connect with server: "+server, logging, debug)
 				} else {
 					client = pb.NewLoggingClient(conn)
 					stream, err = client.Log(context.Background())
 					if err != nil {
-						debugLog("open stream error")
+						fwatcher.DebugLog("open stream error", logging, debug)
 					} else {
-						debugLog("[retry success!]")
+						fwatcher.DebugLog("[retry success!]", logging, debug)
 						ctx = stream.Context()
 						retryFlag = false
 					}
 				}
-				time.Sleep(time.Second * time.Duration(3))
 			}
 
 			if retryFlag == false {
@@ -289,27 +284,33 @@ func clientStart(server, api string) {
 					retryFlag = true
 				} else {
 					if resp.Cmd != trustCmd && resetFlag == false {
-						debugLog("recv: " + resp.Cmd + " " + resp.Str)
+						fwatcher.DebugLog("recv: "+resp.Cmd+" "+resp.Str, logging, debug)
 					}
 
 					switch resp.Cmd {
 					case resetClientCmd:
 						resetFlag = true
-						debugLog("client reseting..")
+						fwatcher.DebugLog("client resetting..", logging, debug)
 						time.Sleep(time.Second * time.Duration(3))
 						initClient(stream, api)
+						if len(clientRules) > 0 {
+							fwatcher.SetWatch(stream, clientRules, myIp, cliTriggers, logging, debug)
+						} else {
+							fmt.Println("rules not found..")
+							os.Exit(1)
+						}
 					case killCmd:
 						killProcessName(resp.Str)
 					case exitCmd:
 						stream.CloseSend()
-						debugLog("add client failed..")
+						fwatcher.DebugLog("add client failed..", logging, debug)
 						os.Exit(1)
 					case noTrustCmd:
-						debugLog("[no trust mode!]")
+						fwatcher.DebugLog("[no trust mode!]", logging, debug)
 						noTrust = true
 					case trustCmd:
 						if noTrust == true {
-							debugLog("[retrust!]")
+							fwatcher.DebugLog("[retrust!]", logging, debug)
 							nowTime = time.Now().Unix()
 						}
 						noTrust = false
@@ -320,7 +321,7 @@ func clientStart(server, api string) {
 	}()
 
 	if len(clientRules) > 0 {
-		setWatch(stream)
+		fwatcher.SetWatch(stream, clientRules, myIp, cliTriggers, logging, debug)
 	} else {
 		fmt.Println("rules not found..")
 		os.Exit(1)
@@ -347,6 +348,9 @@ func JsonToByte(data apiData) []byte {
 func initClient(stream pb.Logging_LogClient, api string) {
 	var server string
 
+	clientRules = nil
+	dataScores = nil
+
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
@@ -358,14 +362,14 @@ func initClient(stream pb.Logging_LogClient, api string) {
 			break
 		}
 
-		debugLog("resp Command: " + resp.Cmd + " String: " + resp.Str)
+		fwatcher.DebugLog("resp Command: "+resp.Cmd+" String: "+resp.Str, logging, debug)
 
 		switch resp.Cmd {
 		case authCmd:
 			sendClientMsg(stream, authCmd, ApiPassword)
 		case exitCmd:
 			stream.CloseSend()
-			debugLog("add client failed..")
+			fwatcher.DebugLog("add client failed..", logging, debug)
 			os.Exit(1)
 		case addTriggerCmd:
 			if val, err := strconv.ParseUint(resp.Str, 10, 32); err == nil {
@@ -378,14 +382,14 @@ func initClient(stream pb.Logging_LogClient, api string) {
 			dataScores = append(dataScores, dataScoresData{SCORE: strb[0], WORD: strb[1]})
 		case setServerCmd:
 			server = resp.Str
-			debugLog("Server: " + server)
+			fwatcher.DebugLog("Server: "+server, logging, debug)
 		default:
 			if cnt, stra, datas := searchPath(resp.Cmd); cnt != 0 {
 				strb := strings.Split(resp.Str, "\t")
-				clientRules = append(clientRules, clientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
+				clientRules = append(clientRules, fwatcher.ClientRuleData{EXEC: stra, CMDLINE: strb, NOPATH: resp.Cmd})
 				if cnt == 2 {
 
-					debugLog("data source: " + stra + " score: " + intStructToString(datas))
+					fwatcher.DebugLog("data source: "+stra+" score: "+intStructToString(datas), logging, debug)
 					_, ip, err := getIFandIP()
 					if err == nil {
 						sendServerHttp(server+api, scoreAddCmd, ip+"\t"+intStructToString(datas), ApiPassword)
@@ -398,7 +402,7 @@ func initClient(stream pb.Logging_LogClient, api string) {
 }
 
 func sendServerHttp(ip, path, data, password string) {
-	debugLog("send: " + ip + " data: " + data + " password:" + password)
+	fwatcher.DebugLog("send: "+ip+" data: "+data+" password:"+password, logging, debug)
 
 	if strings.Index(ip, "https://") == -1 {
 		ip = "https://" + ip + "/api"
@@ -432,7 +436,7 @@ func sendServerHttp(ip, path, data, password string) {
 		log.Fatal(err)
 	}
 
-	debugLog(string(body))
+	fwatcher.DebugLog("response: "+string(body), logging, debug)
 }
 
 func intStructToString(str []int) string {
@@ -466,7 +470,8 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 			} else if err == nil {
 				if resetFlag == true {
 					sendServerMsg(srv, resetClientCmd, "")
-					fmt.Println("send reset")
+					fwatcher.DebugLog("send reset. resetting rules..", logging, debug)
+					respRules(srv)
 					resetFlag = false
 				}
 
@@ -479,7 +484,7 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 					if addClient(req.Str) == true {
 						respRules(srv)
 					} else {
-						debugLog("no match client rule: " + req.Str)
+						fwatcher.DebugLog("no match client rule: "+req.Str, logging, debug)
 						sendServerMsg(srv, exitCmd, "")
 					}
 				case hitCmd:
@@ -487,7 +492,7 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 						sendServerMsg(srv, killCmd, strings.Split(req.Str, "\t")[1])
 					}
 				case pingCmd:
-					//debugLog("server pong!")
+					//fwatcher.DebugLog("server pong!", logging, debug)
 					if scoreSearch(req.Str) == false {
 						sendServerMsg(srv, noTrustCmd, "")
 						if trustSwitch(req.Str) == true {
@@ -561,7 +566,7 @@ func addClient(ip string) bool {
 	for x, client := range clients {
 		if client.IP == ips[0] {
 			if allowOverride == false {
-				debugLog("clients exsits: " + ips[0])
+				fwatcher.DebugLog("clients exsits: "+ips[0], logging, debug)
 				return false
 			} else {
 				ride = x + 1
@@ -574,10 +579,10 @@ func addClient(ip string) bool {
 		if ipRegex.MatchString(ips[0]) == true {
 			if ride > 0 {
 				clients[ride-1].SCORE = rule.SCORE
-				debugLog("override client: " + ips[0] + " " + uname())
+				fwatcher.DebugLog("override client: "+ips[0]+" "+uname(), logging, debug)
 			} else {
 				clients = append(clients, clientsData{IP: ips[0], SCORE: rule.SCORE, DETAIL: ips[1], Trust: true})
-				debugLog("add client: " + ips[0] + " " + uname())
+				fwatcher.DebugLog("add client: "+ips[0]+" "+uname(), logging, debug)
 			}
 			return true
 		}
@@ -737,24 +742,7 @@ func serverStart(port, config string, autoRW bool, cert, key, api string) {
 		}
 		defer watcher.Close()
 
-		go func() {
-			for {
-				select {
-				case <-watcher.Events:
-					loadConfig(config, true)
-				case <-watcher.Errors:
-					fmt.Println("ERROR", err)
-					os.Exit(1)
-				}
-			}
-		}()
-
-		if err := watcher.Add(config); err != nil {
-			fmt.Println("ERROR", err)
-			os.Exit(1)
-		}
-
-		// creates a new file watcher
+		//creates a new file watcher
 		trust, err := fsnotify.NewWatcher()
 		if err != nil {
 			fmt.Println("ERROR", err)
@@ -765,7 +753,23 @@ func serverStart(port, config string, autoRW bool, cert, key, api string) {
 		go func() {
 			for {
 				select {
+				case <-watcher.Events:
+					time.Sleep(time.Second * time.Duration(1))
+					if Exists(lockFile) == false {
+						loadConfig(config, true)
+					}
+				case <-watcher.Errors:
+					fmt.Println("ERROR", err)
+					os.Exit(1)
+				}
+			}
+		}()
+
+		go func() {
+			for {
+				select {
 				case <-trust.Events:
+					time.Sleep(time.Second * time.Duration(1))
 					if Exists(lockFile) == false {
 						loadConfig(trustFile, false)
 					}
@@ -775,6 +779,11 @@ func serverStart(port, config string, autoRW bool, cert, key, api string) {
 				}
 			}
 		}()
+
+		if err := watcher.Add(config); err != nil {
+			fmt.Println("ERROR", err)
+			os.Exit(1)
+		}
 
 		if err := trust.Add(trustFile); err != nil {
 			fmt.Println("ERROR", err)
@@ -834,16 +843,14 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 	w.Header().Set("Content-Type", "application/json")
 
-	if debug == true {
-		fmt.Println("put call: ", r.RemoteAddr, r.URL.Path)
-	}
+	fwatcher.DebugLog("put call: "+r.RemoteAddr+" path: "+r.URL.Path, logging, debug)
 
 	var data *responseData
 	var outputJson []byte
 
 	if len(allows) > 0 {
 		if checkAllows(r.RemoteAddr) == false {
-			debugLog(r.RemoteAddr + ": not allow!")
+			fwatcher.DebugLog(r.RemoteAddr+": not allow!", logging, debug)
 			data = &responseData{Status: "Error", Message: r.RemoteAddr + " not allow!"}
 			outputJson, _ = json.Marshal(data)
 			w.Write(outputJson)
@@ -861,10 +868,10 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	debugLog("api PUT) Name: " + p.Name + " Data: " + p.Data + " Password: " + p.Password)
+	fwatcher.DebugLog("api PUT) Name: "+p.Name+" Data: "+p.Data+" Password: "+p.Password, logging, debug)
 
 	if p.Password == ApiPassword && checkRetrys(r.RemoteAddr) == true {
-		resp := apiDo(r.RemoteAddr, p)
+		resp := apiDo(p)
 		if resp == "" {
 			data = &responseData{Status: "Error", Message: "invalid api call"}
 			addRetrys(r.RemoteAddr)
@@ -874,7 +881,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		if checkRetrys(r.RemoteAddr) == false {
-			debugLog(r.RemoteAddr + ": over retrys")
+			fwatcher.DebugLog(r.RemoteAddr+": over retrys", logging, debug)
 			data = &responseData{Status: "Error", Message: r.RemoteAddr + " : over retrys"}
 		} else {
 			data = &responseData{Status: "Error", Message: r.RemoteAddr + " : password invalid"}
@@ -934,29 +941,35 @@ func checkAllows(ip string) bool {
 	return false
 }
 
-func apiDo(ipp string, apiCall *apiData) string {
-	ip := strings.Split(ipp, ":")[0]
+func apiDo(apiCall *apiData) string {
 	switch apiCall.Name {
 	case scoreAddCmd:
 		scoreAdd(apiCall.Data)
 		return "add " + apiCall.Data
 	case scoreCtlCmd:
+		ip := strings.Split(apiCall.Data, ",")
 		if len(apiCall.Data) > 2 {
-			switch apiCall.Data[0:1] {
+			switch ip[0][0:1] {
 			case "+":
-				i, err := strconv.Atoi(apiCall.Data[1:])
+				i, err := strconv.Atoi(ip[0][1:])
 				if err != nil {
+					fmt.Println(err)
 					return ""
 				}
-				scoreControl(ip, true, i)
-				exportClients()
+				if scoreControl(ip[1], true, i) == true {
+					exportClients()
+					return "calc " + apiCall.Data
+				}
 			case "-":
-				i, err := strconv.Atoi(apiCall.Data[1:])
+				i, err := strconv.Atoi(ip[0][1:])
 				if err != nil {
+					fmt.Println(err)
 					return ""
 				}
-				scoreControl(ip, false, i)
-				exportClients()
+				if scoreControl(ip[1], false, i) == true {
+					exportClients()
+					return "calc " + apiCall.Data
+				}
 			default:
 				return ""
 			}
@@ -968,7 +981,7 @@ func apiDo(ipp string, apiCall *apiData) string {
 			return "reset\t" + resp
 		}
 	case showCmd:
-		debugLog("target: " + apiCall.Data)
+		fwatcher.DebugLog("target: "+apiCall.Data, logging, debug)
 		if resp := searchClients(apiCall.Data); resp != "" {
 			return resp
 		}
@@ -1000,7 +1013,7 @@ func scoreAdd(datas string) {
 
 func searchClients(ip string) string {
 	for _, client := range clientScores {
-		//debugLog("IP: " + client.IP + " SCORE: " + client.Scores)
+		//fwatcher.DebugLog("IP: " + client.IP + " SCORE: " + client.Scores, logging, debug)
 		if ip == client.IP {
 			return client.Scores
 		}
@@ -1008,43 +1021,24 @@ func searchClients(ip string) string {
 	return ""
 }
 
-func scoreControl(ip string, plusMinus bool, cnt int) {
+func scoreControl(ip string, plusMinus bool, cnt int) bool {
 	for x, client := range clients {
 		if client.IP == ip {
 			if plusMinus == true {
 				clients[x].SCORE = clients[x].SCORE + cnt
+				return true
 			} else {
 				if client.SCORE-cnt < 0 {
 					clients[x].SCORE = 0
+					return true
 				} else {
 					clients[x].SCORE = clients[x].SCORE - cnt
+					return true
 				}
 			}
 		}
 	}
-}
-
-func setWatch(stream pb.Logging_LogClient) {
-	var err error
-
-	watman := make([]*fsnotify.Watcher, len(clientRules))
-
-	for x, rule := range clientRules {
-		watman[x], err = fsnotify.NewWatcher()
-		if err != nil {
-			log.Fatal(err)
-			os.Exit(1)
-		}
-
-		debugLog("watch: " + rule.EXEC)
-		err = watman[x].Add(rule.EXEC)
-		if err != nil {
-			log.Fatal(err)
-			os.Exit(1)
-		}
-
-		goRouteWatchStart(watman[x], stream)
-	}
+	return false
 }
 
 func recordOpenProcess() {
@@ -1072,7 +1066,7 @@ func noTrustMode() {
 			strs, err := p.Cmdline()
 			//log.Println(eventName + " " + strs)
 			if err == nil && openProcessSerch(strs) == false {
-				debugLog(strs + ": no trust! Killed!!")
+				fwatcher.DebugLog(strs+": no trust! Killed!!", logging, debug)
 				p.Kill()
 			}
 		}
@@ -1096,98 +1090,29 @@ func killProcessName(processName string) {
 		for _, p := range processes {
 			strs, err := p.Cmdline()
 			//log.Println(eventName + " " + strs)
-			if err == nil && processSerch(strs) == true {
-				debugLog(strs + ": Killed!")
+			if err == nil && fwatcher.ProcessSerch(strs, clientRules) == true {
+				fwatcher.DebugLog(strs+": Killed!", logging, debug)
 				p.Kill()
 			}
 		}
 	}
 }
 
-func ruleSearch(eventName string) string {
-	processes, err := process.Processes()
+func loadConfig(trustFile string, tFlag bool) {
+	lfile, err := os.Create(lockFile)
 	if err != nil {
 		fmt.Println(err)
-	} else {
-		for _, p := range processes {
-			strs, err := p.Cmdline()
-			//log.Println(eventName + " " + strs)
-			if err == nil && processSerch(strs) == true {
-				return strs
-			}
-		}
+		return
 	}
+	lfile.Close()
 
-	return ""
-}
-
-func processSerch(processName string) bool {
-	for i := 0; i < len(clientRules); i++ {
-		for _, CMD := range clientRules[i].CMDLINE {
-			if strings.Index(processName, clientRules[i].NOPATH) != -1 && CMD == "*" {
-				return true
-			}
-
-			if strings.Index(processName, clientRules[i].NOPATH) != -1 && strings.Index(processName, CMD) != -1 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func triggerChecker(ev uint32) bool {
-	for _, x := range cliTriggers {
-		if ev == x {
-			return true
-		}
-	}
-	return false
-}
-
-func goRouteWatchStart(watman *fsnotify.Watcher, stream pb.Logging_LogClient) {
-	go func() {
-		for {
-			if resetFlag == true {
-				resetFlag = false
-				return
-			}
-
-			select {
-			case ev := <-watman.Events:
-				if triggerChecker(uint32(ev.Op)) {
-					debugLog("hit: " + ev.String())
-					if strs := ruleSearch(ev.String()); len(strs) > 0 {
-						sendClientMsg(stream, hitCmd, myIp+"\t"+strs)
-					}
-				}
-			case err := <-watman.Errors:
-				log.Println("error:", err)
-			}
-		}
-	}()
-
-	go func() {
-		for {
-			if resetFlag == true {
-				resetFlag = false
-				return
-			}
-			//debugLog("ping: " + myIp)
-			sendClientMsg(stream, pingCmd, myIp)
-			time.Sleep(time.Second * time.Duration(1))
-		}
-	}()
-
-}
-
-func loadConfig(trustFile string, tFlag bool) {
 	loadOptions := ini.LoadOptions{}
 	if tFlag == true {
 		loadOptions.UnparseableSections = []string{"Trusts", "Rules", "Triggers", "TimeDecrement", "LogDir", "noTrusts", "ApiPassword", "AllowIP", "dataScore"}
 		trusts = nil
 		serverRules = nil
 		svrTriggers = nil
+		dataScores = nil
 	} else {
 		loadOptions.UnparseableSections = []string{"Scores"}
 		clients = nil
@@ -1211,24 +1136,26 @@ func loadConfig(trustFile string, tFlag bool) {
 	} else {
 		setStructs("Scores", cfg.Section("Scores").Body(), 2)
 	}
+
+	os.Remove(lockFile)
 }
 
 func searchPath(filename string) (int, string, []int) {
 	paths := strings.Split(os.Getenv("PATH"), ":")
 	for _, cmd := range paths {
 		if Exists(cmd + "/" + filename) {
-			debugLog("Command Exists! : " + cmd + "/" + filename)
+			fwatcher.DebugLog("Command Exists! : "+cmd+"/"+filename, logging, debug)
 			return 1, cmd + "/" + filename, nil
 		}
 	}
 
 	if Exists(filename) {
-		debugLog("File Exists! : " + filename)
+		fwatcher.DebugLog("File Exists! : "+filename, logging, debug)
 		datas := scanDataScore(filename)
 		return 2, filename, datas
 	}
 
-	debugLog("Not Exists! : " + filename)
+	fwatcher.DebugLog("Not Exists! : "+filename, logging, debug)
 	return 0, "", nil
 }
 
@@ -1274,7 +1201,7 @@ func scanStr(readStr string) int {
 }
 
 func setStructs(configType, datas string, flag int) {
-	debugLog(" -- " + configType + " --")
+	fwatcher.DebugLog(" -- "+configType+" --", logging, debug)
 
 	for _, v := range regexp.MustCompile("\r\n|\n\r|\n|\r").Split(datas, -1) {
 		if strings.Index(v, "\t") != -1 {
@@ -1285,7 +1212,7 @@ func setStructs(configType, datas string, flag int) {
 				if len(strs) == 2 {
 					if val, err := strconv.Atoi(strs[1]); err == nil {
 						trusts = append(trusts, trustData{FILTER: strs[0], SCORE: val})
-						debugLog(v)
+						fwatcher.DebugLog(v, logging, debug)
 					}
 				}
 			case 1:
@@ -1298,7 +1225,7 @@ func setStructs(configType, datas string, flag int) {
 
 					if val, err := strconv.Atoi(strs[0]); err == nil {
 						serverRules = append(serverRules, serverRuleData{SCORE: val, ACT: strs[1], EXEC: strs[2], CMDLINE: strr})
-						debugLog(v)
+						fwatcher.DebugLog(v, logging, debug)
 					}
 				}
 			case 2:
@@ -1309,7 +1236,7 @@ func setStructs(configType, datas string, flag int) {
 						} else {
 							clients = append(clients, clientsData{IP: strs[0], SCORE: val, DETAIL: strs[2], Trust: true})
 						}
-						debugLog(v)
+						fwatcher.DebugLog(v, logging, debug)
 					}
 				}
 			case 4:
@@ -1319,23 +1246,23 @@ func setStructs(configType, datas string, flag int) {
 					if erra == nil && errb == nil {
 						TimeDecrement[0] = vala
 						TimeDecrement[1] = valb
-						debugLog(v)
+						fwatcher.DebugLog(v, logging, debug)
 					}
 				}
 			case 6:
 				if len(strs) == 2 {
 					noTrusts = append(noTrusts, noTrustData{FILTER: strs[0], CMD: strs[1]})
-					debugLog(v)
+					fwatcher.DebugLog(v, logging, debug)
 				}
 			case 8:
 				if len(strs) == 2 {
 					dataScores = append(dataScores, dataScoresData{SCORE: strs[0], WORD: strs[1]})
-					debugLog(v)
+					fwatcher.DebugLog(v, logging, debug)
 				}
 			}
 		} else if flag == 3 {
 			svrTriggers = append(svrTriggers, v)
-			debugLog(v)
+			fwatcher.DebugLog(v, logging, debug)
 		} else if flag == 5 {
 			LogDir = v
 			if Exists(LogDir) == false {
@@ -1344,42 +1271,12 @@ func setStructs(configType, datas string, flag int) {
 					os.Exit(1)
 				}
 			}
-			debugLog(v)
+			fwatcher.DebugLog(v, logging, debug)
 		} else if flag == 7 {
 			allows = append(allows, v)
-			debugLog(v)
+			fwatcher.DebugLog(v, logging, debug)
 		}
 	}
-}
-
-func debugLog(message string) {
-	var file *os.File
-	var err error
-
-	if debug == true {
-		fmt.Println(message)
-	}
-
-	if logging == false {
-		return
-	}
-
-	const layout = "2006-01-02_15"
-	t := time.Now()
-	filename := "goTrust_" + t.Format(layout) + ".log"
-
-	if Exists(filename) == true {
-		file, err = os.OpenFile(filename, os.O_WRONLY|os.O_APPEND, 0666)
-	} else {
-		file, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
-	}
-
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	defer file.Close()
-	fmt.Fprintln(file, message)
 }
 
 func Exists(filename string) bool {
@@ -1439,7 +1336,7 @@ func cmdExec(command, ip string) {
 	var out string
 
 	command = strings.Replace(command, replaceStr, ip, 1)
-	debugLog("command: " + command)
+	fwatcher.DebugLog("command: "+command, logging, debug)
 
 	cmd = exec.Command(os.Getenv("SHELL"), "-c", command)
 
@@ -1452,7 +1349,7 @@ func cmdExec(command, ip string) {
 
 	out = c.StopCapturingStdout()
 
-	debugLog(out)
+	fwatcher.DebugLog(out, logging, debug)
 }
 
 // 標準出力をキャプチャする
