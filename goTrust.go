@@ -1049,7 +1049,7 @@ func recordOpenProcess() {
 	} else {
 		for _, p := range processes {
 			strs, err := p.Cmdline()
-			//log.Println(eventName + " " + strs)
+			//log.Println(strs)
 			if err == nil {
 				openProcess = append(openProcess, strs)
 			}
