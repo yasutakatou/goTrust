@@ -441,13 +441,13 @@ func sendServerHttp(ip, path, data, password string) {
 
 func intStructToString(str []int) string {
 	result := ""
-	for _, ints := range str {
+	for x, ints := range str {
 		cnt := strconv.Itoa(ints)
 		if cnt == "" {
-			result = result + "0,"
+			result = result + dataScores[x].WORD + "0,"
 
 		} else {
-			result = result + cnt + ","
+			result = result + dataScores[x].WORD + " " + cnt + ","
 		}
 	}
 	return result
@@ -481,15 +481,23 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 						sendServerMsg(srv, exitCmd, "password invaid")
 					}
 				case reqCmd:
-					if addClient(req.Str) == true {
-						respRules(srv)
-					} else {
-						fwatcher.DebugLog("no match client rule: "+req.Str, logging, debug)
+					if checkAllows(req.Str) == false {
+						fwatcher.DebugLog(req.Str+": not allow!", logging, debug)
 						sendServerMsg(srv, exitCmd, "")
+					} else {
+						if addClient(req.Str) == true {
+							respRules(srv)
+						} else {
+							fwatcher.DebugLog("no match client rule: "+req.Str, logging, debug)
+							sendServerMsg(srv, exitCmd, "")
+						}
+
 					}
 				case hitCmd:
-					if actRules(srv, req.Str) == true {
-						sendServerMsg(srv, killCmd, strings.Split(req.Str, "\t")[1])
+					if act := actRules(srv, req.Str); act > 0 {
+						if act == 1 {
+							sendServerMsg(srv, killCmd, strings.Split(req.Str, "\t")[1])
+						}
 					}
 				case pingCmd:
 					//fwatcher.DebugLog("server pong!", logging, debug)
@@ -624,22 +632,29 @@ func exportClients() {
 	}
 }
 
-func actRules(srv pb.Logging_LogServer, act string) bool {
+func actRules(srv pb.Logging_LogServer, act string) int {
+	//0: no action 1: kill 2: no kill
 	acts := strings.Split(act, "\t")
 	for i := 0; i < len(serverRules); i++ {
 		for _, CMD := range serverRules[i].CMDLINE {
 			if strings.Index(acts[1], serverRules[i].EXEC) != -1 && CMD == "*" {
 				exportLog(acts[0], serverRules[i], decrementScore(srv, acts[0], serverRules[i].SCORE))
-				return true
+				if serverRules[i].ACT == "KILL" {
+					return 1
+				}
+				return 2
 			}
 
 			if strings.Index(acts[1], serverRules[i].EXEC) != -1 && strings.Index(acts[1], CMD) != -1 {
 				exportLog(acts[0], serverRules[i], decrementScore(srv, acts[0], serverRules[i].SCORE))
-				return true
+				if serverRules[i].ACT == "KILL" {
+					return 1
+				}
+				return 2
 			}
 		}
 	}
-	return false
+	return 0
 }
 
 func exportLog(ip string, rule serverRuleData, score int) {
@@ -1261,8 +1276,18 @@ func setStructs(configType, datas string, flag int) {
 				}
 			}
 		} else if flag == 3 {
-			svrTriggers = append(svrTriggers, v)
-			fwatcher.DebugLog(v, logging, debug)
+			strVal := v
+			if strings.Index(strVal, "0x") == 0 {
+				tmpVal, err := strconv.ParseInt(strings.Replace(strVal, "0x", "", 1), 16, 32)
+				if err == nil {
+					strVal := strconv.FormatInt(tmpVal, 16)
+					svrTriggers = append(svrTriggers, strVal)
+					fwatcher.DebugLog(strVal, logging, debug)
+				}
+			} else {
+				svrTriggers = append(svrTriggers, strVal)
+				fwatcher.DebugLog(strVal, logging, debug)
+			}
 		} else if flag == 5 {
 			LogDir = v
 			if Exists(LogDir) == false {
