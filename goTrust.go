@@ -559,13 +559,7 @@ func uname() string {
 		os.Exit(1)
 	}
 
-	_, ip, err := getIFandIP()
-	if err != nil {
-		log.Fatal(err)
-		os.Exit(1)
-	}
-
-	return hostname + ip
+	return hostname
 }
 
 func addClient(ip string) bool {
