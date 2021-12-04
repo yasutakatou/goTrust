@@ -13,6 +13,10 @@ import (
 	pb "yasutakatou/goTrust/proto"
 )
 
+var (
+	resetFlag = false
+)
+
 const (
 	hitCmd  = "hitProcess"
 	pingCmd = "hello"
@@ -50,6 +54,10 @@ func SetWatch(stream pb.Logging_LogClient, clientRules []ClientRuleData, myIp st
 func GoRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient, clientRules []ClientRuleData, myIp string, cliTriggers []uint32, logging, debug bool) {
 	go func() {
 		for {
+			if resetFlag == true {
+				resetFlag = false
+				return
+			}
 			select {
 			case ev := <-watman.Event:
 				if TriggerChecker(ev.Mask, cliTriggers) {
@@ -66,6 +74,10 @@ func GoRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient, cli
 
 	go func() {
 		for {
+			if resetFlag == true {
+				resetFlag = false
+				return
+			}
 			SendClientMsg(stream, pingCmd, myIp)
 			time.Sleep(time.Second * time.Duration(1))
 		}
@@ -137,7 +149,7 @@ func DebugLog(message string, logging, debug bool) {
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 		return
 	}
 	defer file.Close()
@@ -148,7 +160,7 @@ func SendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
 	//debugLog("sendClientMsg Command: " + cmd + " String: " + str)
 	req := pb.Request{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
-		log.Fatalf("client missing! can not send %v", err)
+		fmt.Printf("watcher: client missing! can not send %v\n", err)
 		//os.Exit(1)
 	}
 }
@@ -156,4 +168,16 @@ func SendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
 func Exists(filename string) bool {
 	_, err := os.Stat(filename)
 	return err == nil
+}
+
+func ResetCheck() bool {
+	return resetFlag
+}
+
+func ResetTrue() {
+	resetFlag = true
+}
+
+func ResetFalse() {
+	resetFlag = false
 }
