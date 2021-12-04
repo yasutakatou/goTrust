@@ -120,7 +120,7 @@ type filterData struct {
 }
 
 var (
-	debug, logging, noTrust, allowOverride, resetFlag                  bool
+	debug, logging, noTrust, allowOverride                             bool
 	trustFile, lockFile, LogDir, replaceStr, serverSecret, ApiPassword string
 	openProcess                                                        []string
 	trusts                                                             []trustData
@@ -178,8 +178,6 @@ func main() {
 	filterCount = int(*_filterCount)
 	ApiPassword = string(*_ApiPassword)
 
-	resetFlag = false
-
 	if *_client == true {
 		noTrust = false
 		clientStart(*_server, *_api)
@@ -202,7 +200,7 @@ func sendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
 	//fwatcher.DebugLog("sendClientMsg Command: " + cmd + " String: " + str)
 	req := pb.Request{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
-		log.Fatalf("client missing! can not send %v", err)
+		fmt.Printf("client missing! can not send %v\n", err)
 		//os.Exit(1)
 	}
 }
@@ -210,7 +208,7 @@ func sendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
 func sendServerMsg(stream pb.Logging_LogServer, cmd, str string) {
 	req := pb.Response{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
-		log.Fatalf("server missing! can not send %v", err)
+		fmt.Printf("server missing! can not send %v\n", err)
 		//os.Exit(1)
 	} else {
 		nowTime = time.Now().Unix()
@@ -238,7 +236,7 @@ func clientStart(server, api string) {
 
 	_, ip, err := getIFandIP()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 		os.Exit(1)
 	}
 	myIp = ip
@@ -264,6 +262,7 @@ func clientStart(server, api string) {
 				time.Sleep(time.Second * time.Duration(3))
 				conn, err = grpc.Dial(server, grpc.WithInsecure())
 				if err != nil {
+					fmt.Println(err)
 					fwatcher.DebugLog("can not connect with server: "+server, logging, debug)
 				} else {
 					client = pb.NewLoggingClient(conn)
@@ -274,6 +273,11 @@ func clientStart(server, api string) {
 						fwatcher.DebugLog("[retry success!]", logging, debug)
 						ctx = stream.Context()
 						retryFlag = false
+
+						fwatcher.ResetTrue()
+						fwatcher.DebugLog("watcher resetting..", logging, debug)
+						time.Sleep(time.Second * time.Duration(3))
+						fwatcher.SetWatch(stream, clientRules, myIp, cliTriggers, logging, debug)
 					}
 				}
 			}
@@ -283,13 +287,13 @@ func clientStart(server, api string) {
 				if err != nil {
 					retryFlag = true
 				} else {
-					if resp.Cmd != trustCmd && resetFlag == false {
+					if resp.Cmd != trustCmd && fwatcher.ResetCheck() == false {
 						fwatcher.DebugLog("recv: "+resp.Cmd+" "+resp.Str, logging, debug)
 					}
 
 					switch resp.Cmd {
 					case resetClientCmd:
-						resetFlag = true
+						fwatcher.ResetTrue()
 						fwatcher.DebugLog("client resetting..", logging, debug)
 						time.Sleep(time.Second * time.Duration(3))
 						initClient(stream, api)
@@ -375,7 +379,7 @@ func initClient(stream pb.Logging_LogClient, api string) {
 			if val, err := strconv.ParseUint(resp.Str, 10, 32); err == nil {
 				cliTriggers = append(cliTriggers, uint32(val))
 			} else {
-				log.Fatal(err)
+				fmt.Println(err)
 			}
 		case addScoreCmd:
 			strb := strings.Split(resp.Str, "\t")
@@ -415,7 +419,7 @@ func sendServerHttp(ip, path, data, password string) {
 	)
 
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 	}
 
 	request.Header.Set("Content-Type", "application/json")
@@ -428,12 +432,12 @@ func sendServerHttp(ip, path, data, password string) {
 	}
 	resp, err := client.Do(request)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 	}
 
 	fwatcher.DebugLog("response: "+string(body), logging, debug)
@@ -468,11 +472,11 @@ func (s server) Log(srv pb.Logging_LogServer) error {
 				log.Println("exit")
 				return nil
 			} else if err == nil {
-				if resetFlag == true {
+				if fwatcher.ResetCheck() == true {
 					sendServerMsg(srv, resetClientCmd, "")
 					fwatcher.DebugLog("send reset. resetting rules..", logging, debug)
 					respRules(srv)
-					resetFlag = false
+					fwatcher.ResetFalse()
 				}
 
 				switch req.Cmd {
@@ -669,7 +673,7 @@ func exportLog(ip string, rule serverRuleData, score int) {
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 		return
 	}
 	defer file.Close()
@@ -843,6 +847,7 @@ func serverStart(port, config string, autoRW bool, cert, key, api string) {
 	// and start...
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
+		os.Exit(1)
 	}
 }
 
@@ -986,7 +991,7 @@ func apiDo(apiCall *apiData) string {
 		return ""
 	case resetClientCmd:
 		if resp := checkClient(apiCall.Data); resp != "" {
-			resetFlag = true
+			fwatcher.ResetTrue()
 			return "reset\t" + resp
 		}
 	case showCmd:
