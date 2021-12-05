@@ -63,7 +63,9 @@ func GoRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient, cli
 				if TriggerChecker(ev.Mask, cliTriggers) {
 					//DebugLog("hit: "+ev.String(), logging, debug)
 					if strs := RuleSearch(ev.String(), clientRules); len(strs) > 0 {
-						SendClientMsg(stream, hitCmd, myIp+"\t"+strs)
+						if SendClientMsg(stream, hitCmd, myIp+"\t"+strs) == false {
+							return
+						}
 					}
 				}
 			case err := <-watman.Error:
@@ -78,7 +80,9 @@ func GoRouteWatchStart(watman *inotify.Watcher, stream pb.Logging_LogClient, cli
 				resetFlag = false
 				return
 			}
-			SendClientMsg(stream, pingCmd, myIp)
+			if SendClientMsg(stream, pingCmd, myIp) == false {
+				return
+			}
 			time.Sleep(time.Second * time.Duration(1))
 		}
 	}()
@@ -156,13 +160,14 @@ func DebugLog(message string, logging, debug bool) {
 	fmt.Fprintln(file, message)
 }
 
-func SendClientMsg(stream pb.Logging_LogClient, cmd, str string) {
-	//debugLog("sendClientMsg Command: " + cmd + " String: " + str)
+func SendClientMsg(stream pb.Logging_LogClient, cmd, str string) bool {
+	//DebugLog("sendClientMsg Command: "+cmd+" String: "+str, false, true)
 	req := pb.Request{Cmd: cmd, Str: str}
 	if err := stream.Send(&req); err != nil {
 		fmt.Printf("watcher: client missing! can not send %v\n", err)
-		//os.Exit(1)
+		return false
 	}
+	return true
 }
 
 func Exists(filename string) bool {

@@ -616,7 +616,7 @@ func exportClients() {
 		for i := 0; i < len(clients); i++ {
 			if len(clients[i].IP) > 7 {
 				convInt := strconv.Itoa(clients[i].SCORE)
-				_, err = file.WriteString(clients[i].IP + "\t" + convInt + "\t" + clients[i].DETAIL)
+				_, err = file.WriteString(clients[i].IP + "\t" + convInt + "\t" + clients[i].DETAIL + "\n")
 			}
 		}
 
