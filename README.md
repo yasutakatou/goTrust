@@ -1,8 +1,8 @@
 # goTrust
-**Zero Trust tool for Linux by Golang**
+**Zero Trust tool by Golang**
 
 # Solution
-　Do you have an *old Linux system* running in your company?　You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.　Moreover, the support has expired and it is vulnerable.　No matter how new you make the front end,in backend that old system will continue to exist as a security hole.<br>
+　Do you have an *old system* running in your company?　You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.　Moreover, the support has expired and it is vulnerable.　No matter how new you make the front end,in backend that old system will continue to exist as a security hole.<br>
 　You are told by your boss.　*"eliminate the security risk on this server!"*<br>
 　You will be distressed.　This legacy systemcan't use latest EDR by not support, and can't pay cost for refactor just now.　I wish they'd just break! No, let's just break it!!!!!!!<br>
 <br>
