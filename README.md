@@ -10,6 +10,19 @@
 <br>
 　This tool, which implements a **simple zero-trust model**, will surely help you with your problem!　And all it takes is the placement of **single binary, cost free**!<br>
 
+## v0.2
+
+- Windows Support (Server and Client!!)
+  - Windows is now supported. It works in both client and server modes.
+- If the connection to the server times out, it will be no trust mode.
+  - It will turn itself into no trust mode when it cannot connect to the server.
+- Data score management
+  - Search the contents of the monitored files and visualize the importance of the data.
+- Rules reset
+  - Server rules can now be reset without a process restart.
+- Control API for additional features (Data score show, Rule reset, Score control)
+  - Created an API for the added functionality
+
 # Feature
 - Monitors access to **specific files** and **checks for executed command line string** triggered by them<br>
 
