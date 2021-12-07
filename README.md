@@ -75,6 +75,7 @@ Client<br>
 Server<br>
 
 note) The score will decrease as the os running time increases same too.
+note [v0.2~]) You can choose any combination of server and client, Windows or Linux.
 
 # Usecase
 1. client) Place the tool on the server you want to monitor, and set it to run when the server starts.
@@ -145,7 +146,8 @@ note) **4. can be written to multiple tabs**.<br>
 
 Define the access that will trigger the alert. By default, we'll use **file and directory access**. If you want to change the rules to creation or deletion, you can check the following page.
 
-[The hexadecimal version of the trigger list is here](https://github.com/torvalds/linux/blob/master/include/linux/fsnotify_backend.h).
+Linux [The hexadecimal version of the trigger list is here](https://github.com/torvalds/linux/blob/master/include/linux/fsnotify_backend.h).
+Windows [fsnotify](https://github.com/fsnotify/fsnotify/blob/master/windows.go)
 
 ```
 #define FS_ACCESS		0x00000001	/* File was accessed */
