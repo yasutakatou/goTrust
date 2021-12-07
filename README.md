@@ -14,6 +14,8 @@
 
 - Windows Support (Server and Client!!)
   - Windows is now supported. It works in both client and server modes.
+- Retry the connection to the server.
+  - The client process used to stop when the connection to the server was lost, but now it retries.
 - If the connection to the server times out, it will be no trust mode.
   - It will turn itself into no trust mode when it cannot connect to the server.
 - Data score management
