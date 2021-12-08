@@ -48,6 +48,92 @@ You can **customize the score** for each rule. In other words, the more critical
 
 - You can define **specific execution** for a server that has a zero score.<br>
 
+## v0.2
+
+### Windows Support (Server and Client!!)
+
+Both server and client are supported when running on Windows.
+
+
+```
+.....hit: "data.txt": WRITE
+hit: "data.txt": WRITE
+recv: killProcess "C:\Program Files (x86)\sakura\sakura.exe" "C:\Users\aaa01\Desktop\goTrust\data.txt"
+"C:\Program Files (x86)\sakura\sakura.exe" "C:\Users\aaa01\Desktop\goTrust\data.txt": Killed!
+recv: killProcess "C:\Program Files (x86)\sakura\sakura.exe" "C:\Users\aaa01\Desktop\goTrust\data.txt"
+```
+
+### Retry the connection to the server.
+
+The client also stopped working when it could not connect to the server, but we added a retry process. Also, when the number of retries exceeds the limit, the client now switches to no trust mode.
+
+```
+..........[retry connect!]
+2021/11/14 21:10:41 context canceled
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+[retry success!]
+--
+...[server missing.. no trust mode!]
+...[retry connect!]
+open stream error
+...[server missing.. no trust mode!]
+````
+
+### Data score management
+
+We can now scan the monitored files to determine if the data is risky or not.
+
+```
+File Exists! : /tmp/data.txt
+data source: /tmp/data.txt score: 100,0,20,
+send: 172.29.207.179:50006 data: 172.29.207.179 100,0,20, password:goTrust
+```
+
+The added score tells you how important the data is.
+
+```
+> curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"show\",\"data\":\"172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":".*jobdata.* 0,.*memberid.* 0,.*UserID.* 30,"}
+````
+
+### Rules reset
+
+Monitoring rules can now be reset without restarting the process.
+
+```
+$ curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/api -d '{"name":"reset","data":"172.29.207.48","password":"goTrust"}'
+```
+
+All the rules will have to be reread.
+
+```
+put call: 172.29.207.48:43492 path: /api
+api PUT) Name: reset Data: 172.29.207.48 Password: goTrust
+send reset. resetting rules..
+```
+
+### Control API for additional features (Data score show, Rule reset, Score control)
+
+Externally usable API for new features. Score manipulation can now be done via the API.
+
+```
+curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"scoreCtl\",\"data\":\"+100,172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":"calc +100,172.29.192.1"}
+```
+
 # Architecture
 
 1. The client connects to the server using **gRPC**　(**Bidirectional streaming RPC**)<br>
@@ -197,6 +283,25 @@ note) **If you want to trust a server with a zero score again, please rewrite th
 ```
 
 The string after the score value is the result of **system uname**.
+
+# API (v0.2)
+
+## show
+
+Make sure that high-risk data is stored for each monitoring target.
+
+```
+>curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"show\",\"data\":\"172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":".*jobdata.* 0,.*memberid.* 0,.*UserID.* 30,"}
+```
+
+## reset
+
+
+
+## scoreCtl
+
+
 
 # options
 
