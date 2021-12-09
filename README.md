@@ -239,7 +239,9 @@ Windows [fsnotify](https://github.com/fsnotify/fsnotify/blob/master/windows.go)
 #define FS_ACCESS		0x00000001	/* File was accessed */
 ```
 
-note) Please convert these value into decimal numbers.<br>
+#### v0.2
+
+note) If it starts with "0x", it is interpreted as a **hexadecimal number**.<br>
 
 ### [TimeDecrement]
 
@@ -271,6 +273,22 @@ In this example, we will output the **IP of the server where the zero score occu
 <br>
 note) Based on the added IP, the idea of shutting down the server from the cloud API can be used to enhance security.
 
+### [AllowIP]
+
+Define the IP address to allow connection<br>
+
+```
+127.0.0.1
+```
+
+### [dataScore]
+
+Defines the importance of the data file. With this definition, scan files with regular expressions and tally the importance of the files.
+
+```
+10	.*UserID.*
+```
+
 ## rules.ini
 
 It's a file for manage **server and the score**.<br>
@@ -297,24 +315,47 @@ Make sure that high-risk data is stored for each monitoring target.
 
 ## reset
 
+Redo the monitoring configuration.
 
+```
+curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/api -d '{"name":"reset","data":"172.29.207.48","password":"goTrust"}'
+```
 
 ## scoreCtl
 
+Manipulate scores via API. You can decide whether to add or subtract the score by specifying + or - before the number.
 
+```
+>curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"scoreCtl\",\"data\":\"+100,172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":"calc +100,172.29.192.1"}
+```
 
 # options
 
 ```
 Usage of ./goTrust:
+  ★-ApiPassword string
+        [-secret=api password] (default "goTrust")
   -allowOverride
         [-allowOverride=trust file override mode (true is enable)]
+  ★-api string
+        [-api=api port (default: :50006)] (default ":50006")
   -auto
         [-auto=config auto read/write mode (true is enable)] (default true)
   -client
         [-client=client mode (true is enable)]
+  ★-clientDisconnect int
+        [-clientDisconnect=client live interval ] (default 60)
+  ★-dataScanCount int
+        [-dataScanCount=data score count lines.] (default 1000)
   -debug
         [-debug=debug mode (true is enable)]
+  ★-filterCount int
+        [-filterCount=allow connect retrys.] (default 3)
+  ★-grpc string
+        [-grpc=grpc port (default: :50005)] (default ":50005")
+  ★-key string
+        [-key=ssl_certificate_key file path] (default "localhost-key.pem")        
   -lock string
         [-lock=lock file name and path] (default "lock")
   -log
@@ -325,6 +366,8 @@ Usage of ./goTrust:
         [-replaceString= when no trust action, give ip paramater] (default "{}")
   -rule string
         [-rule=rules config file] (default "rules.ini")
+  -server string
+        [-server=connect server (default: 127.0.0.1:50005)] (default "127.0.0.1:50005")
   -server string
         [-server=connect server (default: 127.0.0.1:50005)] (default "127.0.0.1:50005")
   -trust string
