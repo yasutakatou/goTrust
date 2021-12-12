@@ -226,6 +226,18 @@ This section define the combination of **files and command strings to be alerted
 3. Files to monitor. (**When can execute file, Auto-detect without writing the full path**)
 4. String to be checked in **combination with the monitoring file**.
 
+The server side should be started as follows (No specific options.)
+
+```
+./goTrust
+```
+
+On the client side, specify option "-client" and the server to connect to
+
+```
+./goTrust -client -server=127.0.0.1:50005
+```
+
 note) **4. can be written to multiple tabs**.<br>
 
 ### [Triggers]
@@ -289,7 +301,7 @@ Defines the importance of the data file. With this definition, scan files with r
 10	.*UserID.*
 ```
 
-## rules.ini
+## trust.ini
 
 It's a file for manage **server and the score**.<br>
 <br>
@@ -303,6 +315,16 @@ note) **If you want to trust a server with a zero score again, please rewrite th
 The string after the score value is the result of **system uname**.
 
 # API (v0.2)
+
+We have created APIs for manipulating scores, resetting rules, and manipulating scores in the data file, and the APIs are called by REST.
+
+- name: API Name
+- data: API Parameter (Specify the IP to operate, etc.)
+- password: API Password (The password to specify for the API. It is specified in the startup options.)
+
+```
+curl -k -H "Content-type: application/json" -X POST https://172.29.207.179:50006/api -d '{"name":"show","data":"172.29.207.179","password":"goTrust"}'
+```
 
 ## show
 
@@ -329,6 +351,15 @@ Manipulate scores via API. You can decide whether to add or subtract the score b
 >curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"scoreCtl\",\"data\":\"+100,172.29.192.1\",\"password\":\"goTrust\"}"
 {"status":"Success","message":"calc +100,172.29.192.1"}
 ```
+
+```
+ -- Scores --
+172.29.207.48   592     DESKTOP-V58043T172.29.207.488
+put call: 172.29.207.48:43634 path: /api
+api PUT) Name: scoreCtl Data: +100,172.29.207.48 Password: goTrust
+ - - - - - 
+[O] IP: 172.29.207.48 Score: 691 Detail: DESKTOP-V58043T172.29.207.488
+````
 
 # options
 
@@ -374,11 +405,23 @@ Usage of ./goTrust:
         [-trust=trusts config file)] (default "trust.ini")
 ```
 
+note) The options marked with ★ can be specified from v0.2.
+
 ## -allowOverride
 
 This option is **allow overwrite** the information of just connecting client if it already exists in trust.ini.<br>
 <br>
 note) This is useful if you want to use it to restart the agent in regularly.
+
+## -ApiPassword
+
+The password to be specified when calling the API.
+
+note) We will consider encrypting it in the future.
+
+## -api
+
+Port number to use for the API.
 
 ## -auto
 
@@ -392,9 +435,27 @@ start client mode.<br>
 <br>
 note) Without this option, it will start in **server mode**.
 
+## -cert
+
+ssl_certificate file path (if you don't use https, haven't to use this option)
+
+## -clientDisconnect
+
+The length of time the client will be allowed to reconnect.
+
+note) If the connection to the server times out, it will be no trust mode.
+
+## -dataScanCount
+
+Number of rows to read when scoring in a data file. The larger the number, the more multiple rows of data will be read.
+
 ## -debug
 
 Run in the mode that outputs various logs.
+
+## -filterCount
+
+Number of retries to allow reconnection in case of wrong password.
 
 ## -lock string
 
@@ -406,11 +467,15 @@ note) Used to perform lock processing when updating **trust.ini**
 
 Specify the log file name.
 
-## -port string
+## -grpc string
 
-port number<br>
+gRPC port number<br>
 <br>
 note) Used when in **server mode**.
+
+## -key
+
+ssl_certificate_key file path (if you don't use https, haven't to use this option)
 
 ## -replaceString string
 
