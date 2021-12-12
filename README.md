@@ -409,8 +409,6 @@ Usage of ./goTrust:
         [-trust=trusts config file)] (default "trust.ini")
 ```
 
-note) The options marked with ★ can be specified from v0.2.
-
 ## -allowOverride
 
 This option is **allow overwrite** the information of just connecting client if it already exists in trust.ini.<br>
