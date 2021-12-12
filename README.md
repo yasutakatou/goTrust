@@ -1,14 +1,29 @@
 # goTrust
-**Zero Trust tool for Linux by Golang**
+**Zero Trust tool by Golang**
 
 # Solution
-　Do you have an *old Linux system* running in your company?　You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.　Moreover, the support has expired and it is vulnerable.　No matter how new you make the front end,in backend that old system will continue to exist as a security hole.<br>
+　Do you have an *old system* running in your company?　You try to upgrade it, but it keeps running because the application is legacy and no one can refactor it.　Moreover, the support has expired and it is vulnerable.　No matter how new you make the front end,in backend that old system will continue to exist as a security hole.<br>
 　You are told by your boss.　*"eliminate the security risk on this server!"*<br>
 　You will be distressed.　This legacy systemcan't use latest EDR by not support, and can't pay cost for refactor just now.　I wish they'd just break! No, let's just break it!!!!!!!<br>
 <br>
 **Stopping!**<br>
 <br>
 　This tool, which implements a **simple zero-trust model**, will surely help you with your problem!　And all it takes is the placement of **single binary, cost free**!<br>
+
+## v0.2
+
+- **Windows Support (Server and Client!!)**
+  - Windows is now supported. It works in both client and server modes.
+- **Retry the connection to the server.**
+  - The client process used to stop when the connection to the server was lost, but now it retries.
+- **If the connection to the server times out, it will be no trust mode.**
+  - It will turn itself into no trust mode when it cannot connect to the server.
+- **Data score management**
+  - Search the contents of the monitored files and visualize the importance of the data.
+- **Rules reset**
+  - Server rules can now be reset without a process restart.
+- **Control API for additional features (Data score show, Rule reset, Score control)**
+  - Created an API for the added functionality
 
 # Feature
 - Monitors access to **specific files** and **checks for executed command line string** triggered by them<br>
@@ -32,6 +47,92 @@ You can **customize the score** for each rule. In other words, the more critical
 - You can **reduce your score over time**. Can put an expiration date on old servers.<br>
 
 - You can define **specific execution** for a server that has a zero score.<br>
+
+## v0.2
+
+### Windows Support (Server and Client!!)
+
+Both server and client are supported when running on Windows.
+
+```
+.....hit: "data.txt": WRITE
+hit: "data.txt": WRITE
+recv: killProcess "C:\Program Files (x86)\sakura\sakura.exe" "C:\Users\aaa01\Desktop\goTrust\data.txt"
+"C:\Program Files (x86)\sakura\sakura.exe" "C:\Users\aaa01\Desktop\goTrust\data.txt": Killed!
+recv: killProcess "C:\Program Files (x86)\sakura\sakura.exe" "C:\Users\aaa01\Desktop\goTrust\data.txt"
+```
+
+### Retry the connection to the server.
+
+The client also stopped working when it could not connect to the server, **but we added a retry process**.<br>
+Also, when the number of retries exceeds the limit, the client now switches to no trust mode.
+
+```
+..........[retry connect!]
+2021/11/14 21:10:41 context canceled
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+open stream error
+...[retry connect!]
+[retry success!]
+--
+...[server missing.. no trust mode!]
+...[retry connect!]
+open stream error
+...[server missing.. no trust mode!]
+````
+
+### Data score management
+
+We can now **scan the monitored files** to determine if the data is risky or not.
+
+```
+File Exists! : /tmp/data.txt
+data source: /tmp/data.txt score: 100,0,20,
+send: 172.29.207.179:50006 data: 172.29.207.179 100,0,20, password:goTrust
+```
+
+The added score tells you how important the data is.
+
+```
+> curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"show\",\"data\":\"172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":".*jobdata.* 0,.*memberid.* 0,.*UserID.* 30,"}
+````
+
+### Rules reset
+
+Monitoring rules can now be reset **without restarting the process**.
+
+```
+$ curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/api -d '{"name":"reset","data":"172.29.207.48","password":"goTrust"}'
+```
+
+All the rules will have to be reread.
+
+```
+put call: 172.29.207.48:43492 path: /api
+api PUT) Name: reset Data: 172.29.207.48 Password: goTrust
+send reset. resetting rules..
+```
+
+### Control API for additional features (Data score show, Rule reset, Score control)
+
+Externally usable API for new features. Score manipulation can now be done via the API.
+
+```
+curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"scoreCtl\",\"data\":\"+100,172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":"calc +100,172.29.192.1"}
+```
 
 # Architecture
 
@@ -60,14 +161,31 @@ Client<br>
 Server<br>
 
 note) The score will decrease as the os running time increases same too.
+note [v0.2~]) You can choose any combination of server and client, Windows or Linux.
 
 # Usecase
-1. client) Place the tool on the server you want to monitor, and set it to run when the server starts.
-2. server) **Define the rules** you want to place in the monitoring target into the management server.
-3. client) Connect to the management server, which will send process string matching the rules via gRPC communication from client.
-4. client) Servers that run dangerous commands or run out of time will get a zero score, so please **receive notifications via Slack or other means**. (trustini.ini -> [noTrusts])
-5. client) You can't run anymore all proccess, so **quarantine and forensic**.
-6. server) If everything is fine, fix the score and return to normal operation.
+
+1. prepare Cert file
+You prepare cert file beforehand. (use mkcert and such more)
+
+2. client) Place the tool on the server you want to monitor, and set it to run when the server starts.
+3. server) **Define the rules** you want to place in the monitoring target into the management server.
+4. client) Connect to the management server, which will send process string matching the rules via gRPC communication from client.
+5. client) Servers that run dangerous commands or run out of time will get a zero score, so please **receive notifications via Slack or other means**. (trustini.ini -> [noTrusts])
+6. client) You can't run anymore all proccess, so **quarantine and forensic**.
+7. server) If everything is fine, fix the score and return to normal operation.
+
+The server side should be started as follows (No specific options.)
+
+```
+./goTrust
+```
+
+On the client side, specify option "-client" and the server to connect to
+
+```
+./goTrust -client -server=127.0.0.1:50005
+```
 
 # installation
 
@@ -130,13 +248,16 @@ note) **4. can be written to multiple tabs**.<br>
 
 Define the access that will trigger the alert. By default, we'll use **file and directory access**. If you want to change the rules to creation or deletion, you can check the following page.
 
-[The hexadecimal version of the trigger list is here](https://github.com/torvalds/linux/blob/master/include/linux/fsnotify_backend.h).
+Linux [The hexadecimal version of the trigger list is here](https://github.com/torvalds/linux/blob/master/include/linux/fsnotify_backend.h).
+Windows [fsnotify](https://github.com/fsnotify/fsnotify/blob/master/windows.go)
 
 ```
 #define FS_ACCESS		0x00000001	/* File was accessed */
 ```
 
-note) Please convert these value into decimal numbers.<br>
+#### v0.2
+
+note) If it starts with "0x", it is interpreted as a **hexadecimal number**.<br>
 
 ### [TimeDecrement]
 
@@ -168,7 +289,23 @@ In this example, we will output the **IP of the server where the zero score occu
 <br>
 note) Based on the added IP, the idea of shutting down the server from the cloud API can be used to enhance security.
 
-## rules.ini
+### [AllowIP]
+
+Define the IP address to **allow connection**<br>
+
+```
+127.0.0.1
+```
+
+### [dataScore]
+
+Defines the importance of the data file. With this definition, **scan files with regular expressions and tally the importance of the files**.
+
+```
+10	.*UserID.*
+```
+
+## trust.ini
 
 It's a file for manage **server and the score**.<br>
 <br>
@@ -181,18 +318,79 @@ note) **If you want to trust a server with a zero score again, please rewrite th
 
 The string after the score value is the result of **system uname**.
 
+# API (v0.2)
+
+We have created APIs for manipulating scores, resetting rules, and manipulating scores in the data file, and the **APIs are called by REST**.
+
+- **name: API Name**
+- **data: API Parameter (Specify the IP to operate, etc.)**
+- **password: API Password (The password to specify for the API. It is specified in the startup options.)**
+
+```
+curl -k -H "Content-type: application/json" -X POST https://172.29.207.179:50006/api -d '{"name":"show","data":"172.29.207.179","password":"goTrust"}'
+```
+
+## show
+
+Make sure that high-risk data is stored for each monitoring target.
+
+```
+>curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"show\",\"data\":\"172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":".*jobdata.* 0,.*memberid.* 0,.*UserID.* 30,"}
+```
+
+## reset
+
+Redo the monitoring configuration.
+
+```
+curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/api -d '{"name":"reset","data":"172.29.207.48","password":"goTrust"}'
+```
+
+## scoreCtl
+
+**Manipulate scores via API**. You can decide whether to add or subtract the score by **specifying + or - before the number**.
+
+```
+>curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"scoreCtl\",\"data\":\"+100,172.29.192.1\",\"password\":\"goTrust\"}"
+{"status":"Success","message":"calc +100,172.29.192.1"}
+```
+
+```
+ -- Scores --
+172.29.207.48   592     DESKTOP-V58043T172.29.207.488
+put call: 172.29.207.48:43634 path: /api
+api PUT) Name: scoreCtl Data: +100,172.29.207.48 Password: goTrust
+ - - - - - 
+[O] IP: 172.29.207.48 Score: 691 Detail: DESKTOP-V58043T172.29.207.488
+````
+
 # options
 
 ```
 Usage of ./goTrust:
+  -ApiPassword string
+        [-secret=api password] (default "goTrust")
   -allowOverride
         [-allowOverride=trust file override mode (true is enable)]
+  -api string
+        [-api=api port (default: :50006)] (default ":50006")
   -auto
         [-auto=config auto read/write mode (true is enable)] (default true)
   -client
         [-client=client mode (true is enable)]
+  -clientDisconnect int
+        [-clientDisconnect=client live interval ] (default 60)
+  -dataScanCount int
+        [-dataScanCount=data score count lines.] (default 1000)
   -debug
         [-debug=debug mode (true is enable)]
+  -filterCount int
+        [-filterCount=allow connect retrys.] (default 3)
+  -grpc string
+        [-grpc=grpc port (default: :50005)] (default ":50005")
+  -key string
+        [-key=ssl_certificate_key file path] (default "localhost-key.pem")        
   -lock string
         [-lock=lock file name and path] (default "lock")
   -log
@@ -205,6 +403,8 @@ Usage of ./goTrust:
         [-rule=rules config file] (default "rules.ini")
   -server string
         [-server=connect server (default: 127.0.0.1:50005)] (default "127.0.0.1:50005")
+  -server string
+        [-server=connect server (default: 127.0.0.1:50005)] (default "127.0.0.1:50005")
   -trust string
         [-trust=trusts config file)] (default "trust.ini")
 ```
@@ -214,6 +414,16 @@ Usage of ./goTrust:
 This option is **allow overwrite** the information of just connecting client if it already exists in trust.ini.<br>
 <br>
 note) This is useful if you want to use it to restart the agent in regularly.
+
+## -ApiPassword
+
+The **password** to be specified when calling the API.<br>
+<br>
+note) We will consider encrypting it in the future.
+
+## -api
+
+Port number to use for the **API**.
 
 ## -auto
 
@@ -227,9 +437,29 @@ start client mode.<br>
 <br>
 note) Without this option, it will start in **server mode**.
 
+## -cert
+
+**ssl_certificate file path**
+
+## -clientDisconnect
+
+The length of time **the client will be allowed to reconnect**.<br>
+<br>
+note) If the connection to the server times out, it will be **no trust mode**.<br>
+
+## -dataScanCount
+
+Number of **rows to read** when scoring in a data file.<br>
+<br>
+note) The larger the number, the more multiple rows of data will be read.<br>
+
 ## -debug
 
 Run in the mode that outputs various logs.
+
+## -filterCount
+
+Number of **retries to allow reconnection** in case of wrong password.
 
 ## -lock string
 
@@ -241,11 +471,15 @@ note) Used to perform lock processing when updating **trust.ini**
 
 Specify the log file name.
 
-## -port string
+## -grpc string
 
-port number<br>
+**gRPC** port number<br>
 <br>
 note) Used when in **server mode**.
+
+## -key
+
+**ssl_certificate_key file path**
 
 ## -replaceString string
 
