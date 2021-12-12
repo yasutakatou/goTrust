@@ -12,17 +12,17 @@
 
 ## v0.2
 
-- Windows Support (Server and Client!!)
+- **Windows Support (Server and Client!!)**
   - Windows is now supported. It works in both client and server modes.
-- Retry the connection to the server.
+- **Retry the connection to the server.**
   - The client process used to stop when the connection to the server was lost, but now it retries.
-- If the connection to the server times out, it will be no trust mode.
+- **If the connection to the server times out, it will be no trust mode.**
   - It will turn itself into no trust mode when it cannot connect to the server.
-- Data score management
+- **Data score management**
   - Search the contents of the monitored files and visualize the importance of the data.
-- Rules reset
+- **Rules reset**
   - Server rules can now be reset without a process restart.
-- Control API for additional features (Data score show, Rule reset, Score control)
+- **Control API for additional features (Data score show, Rule reset, Score control)**
   - Created an API for the added functionality
 
 # Feature
@@ -54,7 +54,6 @@ You can **customize the score** for each rule. In other words, the more critical
 
 Both server and client are supported when running on Windows.
 
-
 ```
 .....hit: "data.txt": WRITE
 hit: "data.txt": WRITE
@@ -65,7 +64,8 @@ recv: killProcess "C:\Program Files (x86)\sakura\sakura.exe" "C:\Users\aaa01\Des
 
 ### Retry the connection to the server.
 
-The client also stopped working when it could not connect to the server, but we added a retry process. Also, when the number of retries exceeds the limit, the client now switches to no trust mode.
+The client also stopped working when it could not connect to the server, **but we added a retry process**.<br>
+Also, when the number of retries exceeds the limit, the client now switches to no trust mode.
 
 ```
 ..........[retry connect!]
@@ -94,7 +94,7 @@ open stream error
 
 ### Data score management
 
-We can now scan the monitored files to determine if the data is risky or not.
+We can now **scan the monitored files** to determine if the data is risky or not.
 
 ```
 File Exists! : /tmp/data.txt
@@ -111,7 +111,7 @@ The added score tells you how important the data is.
 
 ### Rules reset
 
-Monitoring rules can now be reset without restarting the process.
+Monitoring rules can now be reset **without restarting the process**.
 
 ```
 $ curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/api -d '{"name":"reset","data":"172.29.207.48","password":"goTrust"}'
@@ -164,12 +164,28 @@ note) The score will decrease as the os running time increases same too.
 note [v0.2~]) You can choose any combination of server and client, Windows or Linux.
 
 # Usecase
-1. client) Place the tool on the server you want to monitor, and set it to run when the server starts.
-2. server) **Define the rules** you want to place in the monitoring target into the management server.
-3. client) Connect to the management server, which will send process string matching the rules via gRPC communication from client.
-4. client) Servers that run dangerous commands or run out of time will get a zero score, so please **receive notifications via Slack or other means**. (trustini.ini -> [noTrusts])
-5. client) You can't run anymore all proccess, so **quarantine and forensic**.
-6. server) If everything is fine, fix the score and return to normal operation.
+
+1. prepare Cert file
+You prepare cert file beforehand. (use mkcert and such more)
+
+2. client) Place the tool on the server you want to monitor, and set it to run when the server starts.
+3. server) **Define the rules** you want to place in the monitoring target into the management server.
+4. client) Connect to the management server, which will send process string matching the rules via gRPC communication from client.
+5. client) Servers that run dangerous commands or run out of time will get a zero score, so please **receive notifications via Slack or other means**. (trustini.ini -> [noTrusts])
+6. client) You can't run anymore all proccess, so **quarantine and forensic**.
+7. server) If everything is fine, fix the score and return to normal operation.
+
+The server side should be started as follows (No specific options.)
+
+```
+./goTrust
+```
+
+On the client side, specify option "-client" and the server to connect to
+
+```
+./goTrust -client -server=127.0.0.1:50005
+```
 
 # installation
 
@@ -226,18 +242,6 @@ This section define the combination of **files and command strings to be alerted
 3. Files to monitor. (**When can execute file, Auto-detect without writing the full path**)
 4. String to be checked in **combination with the monitoring file**.
 
-The server side should be started as follows (No specific options.)
-
-```
-./goTrust
-```
-
-On the client side, specify option "-client" and the server to connect to
-
-```
-./goTrust -client -server=127.0.0.1:50005
-```
-
 note) **4. can be written to multiple tabs**.<br>
 
 ### [Triggers]
@@ -287,7 +291,7 @@ note) Based on the added IP, the idea of shutting down the server from the cloud
 
 ### [AllowIP]
 
-Define the IP address to allow connection<br>
+Define the IP address to **allow connection**<br>
 
 ```
 127.0.0.1
@@ -295,7 +299,7 @@ Define the IP address to allow connection<br>
 
 ### [dataScore]
 
-Defines the importance of the data file. With this definition, scan files with regular expressions and tally the importance of the files.
+Defines the importance of the data file. With this definition, **scan files with regular expressions and tally the importance of the files**.
 
 ```
 10	.*UserID.*
@@ -316,11 +320,11 @@ The string after the score value is the result of **system uname**.
 
 # API (v0.2)
 
-We have created APIs for manipulating scores, resetting rules, and manipulating scores in the data file, and the APIs are called by REST.
+We have created APIs for manipulating scores, resetting rules, and manipulating scores in the data file, and the **APIs are called by REST**.
 
-- name: API Name
-- data: API Parameter (Specify the IP to operate, etc.)
-- password: API Password (The password to specify for the API. It is specified in the startup options.)
+- **name: API Name**
+- **data: API Parameter (Specify the IP to operate, etc.)**
+- **password: API Password (The password to specify for the API. It is specified in the startup options.)**
 
 ```
 curl -k -H "Content-type: application/json" -X POST https://172.29.207.179:50006/api -d '{"name":"show","data":"172.29.207.179","password":"goTrust"}'
@@ -345,7 +349,7 @@ curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/
 
 ## scoreCtl
 
-Manipulate scores via API. You can decide whether to add or subtract the score by specifying + or - before the number.
+**Manipulate scores via API**. You can decide whether to add or subtract the score by **specifying + or - before the number**.
 
 ```
 >curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"scoreCtl\",\"data\":\"+100,172.29.192.1\",\"password\":\"goTrust\"}"
@@ -365,27 +369,27 @@ api PUT) Name: scoreCtl Data: +100,172.29.207.48 Password: goTrust
 
 ```
 Usage of ./goTrust:
-  ★-ApiPassword string
+  -ApiPassword string
         [-secret=api password] (default "goTrust")
   -allowOverride
         [-allowOverride=trust file override mode (true is enable)]
-  ★-api string
+  -api string
         [-api=api port (default: :50006)] (default ":50006")
   -auto
         [-auto=config auto read/write mode (true is enable)] (default true)
   -client
         [-client=client mode (true is enable)]
-  ★-clientDisconnect int
+  -clientDisconnect int
         [-clientDisconnect=client live interval ] (default 60)
-  ★-dataScanCount int
+  -dataScanCount int
         [-dataScanCount=data score count lines.] (default 1000)
   -debug
         [-debug=debug mode (true is enable)]
-  ★-filterCount int
+  -filterCount int
         [-filterCount=allow connect retrys.] (default 3)
-  ★-grpc string
+  -grpc string
         [-grpc=grpc port (default: :50005)] (default ":50005")
-  ★-key string
+  -key string
         [-key=ssl_certificate_key file path] (default "localhost-key.pem")        
   -lock string
         [-lock=lock file name and path] (default "lock")
@@ -415,13 +419,13 @@ note) This is useful if you want to use it to restart the agent in regularly.
 
 ## -ApiPassword
 
-The password to be specified when calling the API.
-
+The **password** to be specified when calling the API.<br>
+<br>
 note) We will consider encrypting it in the future.
 
 ## -api
 
-Port number to use for the API.
+Port number to use for the **API**.
 
 ## -auto
 
@@ -437,17 +441,19 @@ note) Without this option, it will start in **server mode**.
 
 ## -cert
 
-ssl_certificate file path (if you don't use https, haven't to use this option)
+**ssl_certificate file path**
 
 ## -clientDisconnect
 
-The length of time the client will be allowed to reconnect.
-
-note) If the connection to the server times out, it will be no trust mode.
+The length of time **the client will be allowed to reconnect**.<br>
+<br>
+note) If the connection to the server times out, it will be **no trust mode**.<br>
 
 ## -dataScanCount
 
-Number of rows to read when scoring in a data file. The larger the number, the more multiple rows of data will be read.
+Number of **rows to read** when scoring in a data file.<br>
+<br>
+note) The larger the number, the more multiple rows of data will be read.<br>
 
 ## -debug
 
@@ -455,7 +461,7 @@ Run in the mode that outputs various logs.
 
 ## -filterCount
 
-Number of retries to allow reconnection in case of wrong password.
+Number of **retries to allow reconnection** in case of wrong password.
 
 ## -lock string
 
@@ -469,13 +475,13 @@ Specify the log file name.
 
 ## -grpc string
 
-gRPC port number<br>
+**gRPC** port number<br>
 <br>
 note) Used when in **server mode**.
 
 ## -key
 
-ssl_certificate_key file path (if you don't use https, haven't to use this option)
+**ssl_certificate_key file path**
 
 ## -replaceString string
 
