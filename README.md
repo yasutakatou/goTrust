@@ -334,6 +334,10 @@ curl -k -H "Content-type: application/json" -X POST https://172.29.207.179:50006
 
 Make sure that high-risk data is stored for each monitoring target.
 
+- name: show
+- data: **IP of the target client**
+- password: API Password
+
 ```
 >curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"show\",\"data\":\"172.29.192.1\",\"password\":\"goTrust\"}"
 {"status":"Success","message":".*jobdata.* 0,.*memberid.* 0,.*UserID.* 30,"}
@@ -343,6 +347,10 @@ Make sure that high-risk data is stored for each monitoring target.
 
 Redo the monitoring configuration.
 
+- name: reset
+- data: **IP of the target client**
+- password: API Password
+
 ```
 curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/api -d '{"name":"reset","data":"172.29.207.48","password":"goTrust"}'
 ```
@@ -351,10 +359,16 @@ curl -k -H "Content-type: application/json" -X POST https://172.29.207.48:50006/
 
 **Manipulate scores via API**. You can decide whether to add or subtract the score by **specifying + or - before the number**.
 
+- name: scoreCtl
+- data: **Minus or plus and comma. IP of the target client.**
+- password: API Password
+
 ```
 >curl -k -H "Content-type: application/json" -X POST https://172.29.192.1:50006/api -d "{\"name\":\"scoreCtl\",\"data\":\"+100,172.29.192.1\",\"password\":\"goTrust\"}"
 {"status":"Success","message":"calc +100,172.29.192.1"}
 ```
+
+This is for a score of 172.29.192.1 plus 100
 
 ```
  -- Scores --
